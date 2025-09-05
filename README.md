@@ -656,6 +656,19 @@ results = searcher.search(
 
 📖 **[Complete Metadata filtering guide →](docs/metadata_filtering.md)**
 
+### 🔍 Grep Search
+
+For exact text matching instead of semantic search, use the `use_grep` parameter:
+
+```python
+# Exact text search
+results = searcher.search("banana‑crocodile", use_grep=True, top_k=1)
+```
+
+**Use cases**: Finding specific code patterns, error messages, function names, or exact phrases where semantic similarity isn't needed.
+
+📖 **[Complete grep search guide →](docs/grep_search.md)**
+
 ## 🏗️ Architecture & How It Works
 
 <p align="center">
