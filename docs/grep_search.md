@@ -71,7 +71,7 @@ configs = searcher.search("server_port=", use_grep=True)
 ### Search Process
 
 ```
-Query: "def train_model" 
+Query: "def train_model"
   ↓
 grep -i -n "def train_model" documents.leann.passages.jsonl
   ↓
@@ -130,14 +130,14 @@ from leann.api import LeannSearcher
 def demonstrate_grep_search():
     # Initialize searcher
     searcher = LeannSearcher("my_index")
-    
+
     print("=== Function Search ===")
     functions = searcher.search("def __init__", use_grep=True, top_k=5)
     for i, result in enumerate(functions, 1):
         print(f"{i}. Score: {result.score}")
         print(f"   Preview: {result.text[:60]}...")
         print()
-    
+
     print("=== Error Search ===")
     errors = searcher.search("FileNotFoundError", use_grep=True, top_k=3)
     for result in errors:
