@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import sys
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -1216,13 +1215,8 @@ Examples:
         if use_ast:
             print("🧠 Using AST-aware chunking for code files")
             try:
-                # Import enhanced chunking utilities
-                # Add apps directory to path to import chunking utilities
-                apps_dir = Path(__file__).parent.parent.parent.parent.parent / "apps"
-                if apps_dir.exists():
-                    sys.path.insert(0, str(apps_dir))
-
-                from chunking import create_text_chunks
+                # Import enhanced chunking utilities from packaged module
+                from .chunking_utils import create_text_chunks
 
                 # Use enhanced chunking with AST support
                 all_texts = create_text_chunks(
@@ -1237,7 +1231,9 @@ Examples:
                 )
 
             except ImportError as e:
-                print(f"⚠️  AST chunking not available ({e}), falling back to traditional chunking")
+                print(
+                    f"⚠️  AST chunking utilities not available in package ({e}), falling back to traditional chunking"
+                )
                 use_ast = False
 
         if not use_ast:
