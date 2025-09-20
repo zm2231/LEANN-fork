@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.12'",
@@ -2138,7 +2138,7 @@ wheels = [
 
 [[package]]
 name = "leann-backend-diskann"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "packages/leann-backend-diskann" }
 dependencies = [
     { name = "leann-core" },
@@ -2150,14 +2150,14 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "leann-core", specifier = "==0.3.3" },
+    { name = "leann-core", specifier = "==0.3.4" },
     { name = "numpy" },
     { name = "protobuf", specifier = ">=3.19.0" },
 ]
 
 [[package]]
 name = "leann-backend-hnsw"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "packages/leann-backend-hnsw" }
 dependencies = [
     { name = "leann-core" },
@@ -2170,7 +2170,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "leann-core", specifier = "==0.3.3" },
+    { name = "leann-core", specifier = "==0.3.4" },
     { name = "msgpack", specifier = ">=1.0.0" },
     { name = "numpy" },
     { name = "pyzmq", specifier = ">=23.0.0" },
@@ -2178,7 +2178,7 @@ requires-dist = [
 
 [[package]]
 name = "leann-core"
-version = "0.3.3"
+version = "0.3.4"
 source = { editable = "packages/leann-core" }
 dependencies = [
     { name = "accelerate" },
