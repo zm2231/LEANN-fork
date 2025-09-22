@@ -14,7 +14,7 @@ from leann.interface import (
 from leann.registry import register_backend
 from leann.searcher_base import BaseSearcher
 
-from .convert_to_csr import convert_hnsw_graph_to_csr
+from .convert_to_csr import convert_hnsw_graph_to_csr, prune_hnsw_embeddings_inplace
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,8 @@ class HNSWBuilder(LeannBackendBuilderInterface):
 
         if self.is_compact:
             self._convert_to_csr(index_file)
+        elif self.is_recompute:
+            prune_hnsw_embeddings_inplace(str(index_file))
 
     def _convert_to_csr(self, index_file: Path):
         """Convert built index to CSR format"""
@@ -133,10 +135,10 @@ class HNSWSearcher(BaseSearcher):
         if metric_enum is None:
             raise ValueError(f"Unsupported distance_metric '{self.distance_metric}'.")
 
-        self.is_compact, self.is_pruned = (
-            self.meta.get("is_compact", True),
-            self.meta.get("is_pruned", True),
-        )
+        backend_meta_kwargs = self.meta.get("backend_kwargs", {})
+        self.is_compact = self.meta.get("is_compact", backend_meta_kwargs.get("is_compact", True))
+        default_pruned = backend_meta_kwargs.get("is_recompute", self.is_compact)
+        self.is_pruned = bool(self.meta.get("is_pruned", default_pruned))
 
         index_file = self.index_dir / f"{self.index_path.stem}.index"
         if not index_file.exists():
