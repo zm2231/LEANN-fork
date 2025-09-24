@@ -53,27 +53,10 @@ dependencies = [
     "tree-sitter-java>=0.20.0",
     "tree-sitter-c-sharp>=0.20.0",
     "tree-sitter-typescript>=0.20.0",
+    "torchvision>=0.23.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-    "pytest-xdist>=3.0",  # For parallel test execution
-    "black>=23.0",
-    "ruff==0.12.7",  # Fixed version to ensure consistent formatting across all environments
-    "matplotlib",
-    "huggingface-hub>=0.20.0",
-    "pre-commit>=3.5.0",
-]
-
-test = [
-    "pytest>=7.0",
-    "pytest-timeout>=2.0",
-    "llama-index-core>=0.12.0",
-    "python-dotenv>=1.0.0",
-]
-
 diskann = [
     "leann-backend-diskann",
 ]
@@ -100,6 +83,28 @@ leann-core = { path = "packages/leann-core", editable = true }
 leann-backend-diskann = { path = "packages/leann-backend-diskann", editable = true }
 leann-backend-hnsw = { path = "packages/leann-backend-hnsw", editable = true }
 astchunk = { path = "packages/astchunk-leann", editable = true }
+
+[dependency-groups]
+# Minimal lint toolchain for CI and local hooks
+lint = [
+    "pre-commit>=3.5.0",
+    "ruff==0.12.7",  # Fixed version to ensure consistent formatting across all environments
+]
+
+# Test toolchain (no heavy project runtime deps)
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-xdist>=3.0",
+    "pytest-timeout>=2.0",
+    "python-dotenv>=1.0.0",
+]
+
+# dependencies by apps/ should list here
+dev = [
+    "matplotlib",
+    "huggingface-hub>=0.20.0",
+]
 
 [tool.ruff]
 target-version = "py39"
