@@ -611,6 +611,9 @@ leann search my-docs "machine learning concepts"
 # Interactive chat with your documents
 leann ask my-docs --interactive
 
+# Ask a single question (non-interactive)
+leann ask my-docs "Where are prompts configured?"
+
 # List all your indexes
 leann list
 

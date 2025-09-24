@@ -258,6 +258,11 @@ Examples:
         ask_parser = subparsers.add_parser("ask", help="Ask questions")
         ask_parser.add_argument("index_name", help="Index name")
         ask_parser.add_argument(
+            "query",
+            nargs="?",
+            help="Question to ask (omit for prompt or when using --interactive)",
+        )
+        ask_parser.add_argument(
             "--llm",
             type=str,
             default="ollama",
@@ -1531,7 +1536,29 @@ Examples:
 
         chat = LeannChat(index_path=index_path, llm_config=llm_config)
 
+        llm_kwargs: dict[str, Any] = {}
+        if args.thinking_budget:
+            llm_kwargs["thinking_budget"] = args.thinking_budget
+
+        def _ask_once(prompt: str) -> None:
+            response = chat.ask(
+                prompt,
+                top_k=args.top_k,
+                complexity=args.complexity,
+                beam_width=args.beam_width,
+                prune_ratio=args.prune_ratio,
+                recompute_embeddings=args.recompute_embeddings,
+                pruning_strategy=args.pruning_strategy,
+                llm_kwargs=llm_kwargs,
+            )
+            print(f"LEANN: {response}")
+
+        initial_query = (args.query or "").strip()
+
         if args.interactive:
+            if initial_query:
+                _ask_once(initial_query)
+
             print("LEANN Assistant ready! Type 'quit' to exit")
             print("=" * 40)
 
@@ -1544,41 +1571,14 @@ Examples:
                 if not user_input:
                     continue
 
-                # Prepare LLM kwargs with thinking budget if specified
-                llm_kwargs = {}
-                if args.thinking_budget:
-                    llm_kwargs["thinking_budget"] = args.thinking_budget
-
-                response = chat.ask(
-                    user_input,
-                    top_k=args.top_k,
-                    complexity=args.complexity,
-                    beam_width=args.beam_width,
-                    prune_ratio=args.prune_ratio,
-                    recompute_embeddings=args.recompute_embeddings,
-                    pruning_strategy=args.pruning_strategy,
-                    llm_kwargs=llm_kwargs,
-                )
-                print(f"LEANN: {response}")
+                _ask_once(user_input)
         else:
-            query = input("Enter your question: ").strip()
-            if query:
-                # Prepare LLM kwargs with thinking budget if specified
-                llm_kwargs = {}
-                if args.thinking_budget:
-                    llm_kwargs["thinking_budget"] = args.thinking_budget
+            query = initial_query or input("Enter your question: ").strip()
+            if not query:
+                print("No question provided. Exiting.")
+                return
 
-                response = chat.ask(
-                    query,
-                    top_k=args.top_k,
-                    complexity=args.complexity,
-                    beam_width=args.beam_width,
-                    prune_ratio=args.prune_ratio,
-                    recompute_embeddings=args.recompute_embeddings,
-                    pruning_strategy=args.pruning_strategy,
-                    llm_kwargs=llm_kwargs,
-                )
-                print(f"LEANN: {response}")
+            _ask_once(query)
 
     async def run(self, args=None):
         parser = self.create_parser()
