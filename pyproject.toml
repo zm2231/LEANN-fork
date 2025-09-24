@@ -106,7 +106,7 @@ target-version = "py39"
 line-length = 100
 extend-exclude = [
     "third_party",
-    "apps/multimodal/vision-based-pdf-multi-vector/multi-vector-leann.py",
+    "apps/multimodal/vision-based-pdf-multi-vector/multi-vector-leann-paper-example.py",
     "apps/multimodal/vision-based-pdf-multi-vector/multi-vector-leann-similarity-map.py"
 ]
 

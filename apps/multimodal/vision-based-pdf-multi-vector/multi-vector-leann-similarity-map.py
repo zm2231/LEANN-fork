@@ -169,7 +169,7 @@ def _embed_images(model, processor, images: list[Image.Image]) -> list[Any]:
     )
 
     doc_vecs: list[Any] = []
-    for batch_doc in dataloader:
+    for batch_doc in tqdm(dataloader, desc="Embedding images"):
         with torch.no_grad():
             batch_doc = {k: v.to(model.device) for k, v in batch_doc.items()}
             # autocast on CUDA for bf16/fp16; on CPU/MPS stay in fp32
@@ -200,7 +200,7 @@ def _embed_queries(model, processor, queries: list[str]) -> list[Any]:
     )
 
     q_vecs: list[Any] = []
-    for batch_query in dataloader:
+    for batch_query in tqdm(dataloader, desc="Embedding queries"):
         with torch.no_grad():
             batch_query = {k: v.to(model.device) for k, v in batch_query.items()}
             if model.device.type == "cuda":
@@ -362,7 +362,7 @@ if USE_HF_DATASET:
     N = len(dataset) if MAX_DOCS is None else min(MAX_DOCS, len(dataset))
     filepaths: list[str] = []
     images: list[Image.Image] = []
-    for i in tqdm(range(N), desc="Loading dataset"):
+    for i in tqdm(range(N), desc="Loading dataset", total=N ):
         p = dataset[i]
         # Compose a descriptive identifier for printing later
         identifier = f"arXiv:{p['paper_arxiv_id']}|title:{p['paper_title']}|page:{int(p['page_number'])}|id:{p['page_id']}"
