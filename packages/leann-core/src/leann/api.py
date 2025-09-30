@@ -735,6 +735,20 @@ class LeannBuilder:
                 storage_index = faiss.IndexFlatL2(index.d)
             index.storage = storage_index
             index.own_fields = True
+            # Faiss expects storage.ntotal to reflect the existing graph's
+            # population (even if the vectors themselves were pruned from disk
+            # for recompute mode).  When we attach a fresh IndexFlat here its
+            # ntotal starts at zero, which later causes IndexHNSW::add to
+            # believe new "preset" levels were provided and trips the
+            # `n0 + n == levels.size()` assertion.  Seed the temporary storage
+            # with the current ntotal so Faiss maintains the proper offset for
+            # incoming vectors.
+            try:
+                storage_index.ntotal = index.ntotal
+            except AttributeError:
+                # Older Faiss builds may not expose ntotal as a writable
+                # attribute; in that case we fall back to the default behaviour.
+                pass
         if index.d != embedding_dim:
             raise ValueError(
                 f"Existing index dimension ({index.d}) does not match new embeddings ({embedding_dim})."
