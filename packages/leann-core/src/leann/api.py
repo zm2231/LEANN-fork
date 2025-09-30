@@ -813,11 +813,16 @@ class LeannBuilder:
                             "Failed to start HNSW embedding server for recompute update."
                         )
                     if actual_port != requested_zmq_port:
-                        server_manager.stop_server()
-                        raise RuntimeError(
-                            "Embedding server started on unexpected port "
-                            f"{actual_port}; expected {requested_zmq_port}. Make sure the desired ZMQ port is free."
+                        logger.warning(
+                            "Embedding server started on port %s instead of requested %s. "
+                            "Using reassigned port.",
+                            actual_port,
+                            requested_zmq_port,
                         )
+                    try:
+                        index.hnsw.zmq_port = actual_port
+                    except AttributeError:
+                        pass
 
                 if needs_recompute:
                     for i in range(embeddings.shape[0]):
