@@ -43,7 +43,11 @@ from apps.chunking import create_text_chunks
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 DEFAULT_QUERY = "What's LEANN?"
-DEFAULT_INITIAL_FILES = [REPO_ROOT / "data" / "2501.14312v1 (1).pdf"]
+DEFAULT_INITIAL_FILES = [
+    REPO_ROOT / "data" / "2501.14312v1 (1).pdf",
+    REPO_ROOT / "data" / "huawei_pangu.md",
+    REPO_ROOT / "data" / "PrideandPrejudice.txt",
+]
 DEFAULT_UPDATE_FILES = [REPO_ROOT / "data" / "2506.08276v1.pdf"]
 
 

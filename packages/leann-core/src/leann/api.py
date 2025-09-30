@@ -728,6 +728,7 @@ class LeannBuilder:
         index = faiss.read_index(str(index_file))
         if hasattr(index, "is_recompute"):
             index.is_recompute = needs_recompute
+            print(f"index.is_recompute: {index.is_recompute}")
         if getattr(index, "storage", None) is None:
             if index.metric_type == faiss.METRIC_INNER_PRODUCT:
                 storage_index = faiss.IndexFlatIP(index.d)
@@ -760,7 +761,15 @@ class LeannBuilder:
             chunk.setdefault("metadata", {})["id"] = new_id
             chunk["id"] = new_id
 
-        index.add(embeddings.shape[0], faiss.swig_ptr(embeddings))
+        if needs_recompute:
+            # sequengtially add embeddings
+            for i in range(embeddings.shape[0]):
+                print(f"add {i} embeddings")
+                index.add(1, faiss.swig_ptr(embeddings[i : i + 1]))
+        else:
+            index.add(embeddings.shape[0], faiss.swig_ptr(embeddings))
+
+        # index.add(embeddings.shape[0], faiss.swig_ptr(embeddings))
         faiss.write_index(index, str(index_file))
 
         with open(passages_file, "a", encoding="utf-8") as f:
