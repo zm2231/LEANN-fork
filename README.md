@@ -20,7 +20,7 @@ LEANN is an innovative vector database that democratizes personal AI. Transform 
 
 LEANN achieves this through *graph-based selective recomputation* with *high-degree preserving pruning*, computing embeddings on-demand instead of storing them all. [Illustration Fig →](#️-architecture--how-it-works) | [Paper →](https://arxiv.org/abs/2506.08276)
 
-**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)**, **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
+**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](#-wechat-detective-unlock-your-golden-memories), [iMessage](#-imessage-history-your-personal-conversation-archive)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](#-chatgpt-chat-history-your-personal-ai-conversation-archive), [Claude](#-claude-chat-history-your-personal-ai-conversation-archive)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
 
 
 \* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
@@ -176,7 +176,7 @@ response = chat.ask("How much storage does LEANN save?", top_k=1)
 
 ## RAG on Everything!
 
-LEANN supports RAG on various data sources including documents (`.pdf`, `.txt`, `.md`), Apple Mail, Google Search History, WeChat, and more.
+LEANN supports RAG on various data sources including documents (`.pdf`, `.txt`, `.md`), Apple Mail, Google Search History, WeChat, ChatGPT conversations, Claude conversations, iMessage conversations, and more.
 
 
 
@@ -539,6 +539,238 @@ python -m apps.wechat_rag --force-export --query "work schedule"
 Once the index is built, you can ask questions like:
 
 - "我想买魔术师约翰逊的球衣，给我一些对应聊天记录?" (Chinese: Show me chat records about buying Magic Johnson's jersey)
+
+</details>
+
+### 🤖 ChatGPT Chat History: Your Personal AI Conversation Archive!
+
+Transform your ChatGPT conversations into a searchable knowledge base! Search through all your ChatGPT discussions about coding, research, brainstorming, and more.
+
+```bash
+python -m apps.chatgpt_rag --export-path chatgpt_export.html --query "How do I create a list in Python?"
+```
+
+**Unlock your AI conversation history.** Never lose track of valuable insights from your ChatGPT discussions again.
+
+<details>
+<summary><strong>📋 Click to expand: How to Export ChatGPT Data</strong></summary>
+
+**Step-by-step export process:**
+
+1. **Sign in to ChatGPT**
+2. **Click your profile icon** in the top right corner
+3. **Navigate to Settings** → **Data Controls**
+4. **Click "Export"** under Export Data
+5. **Confirm the export** request
+6. **Download the ZIP file** from the email link (expires in 24 hours)
+7. **Extract or use directly** with LEANN
+
+**Supported formats:**
+- `.html` files from ChatGPT exports
+- `.zip` archives from ChatGPT
+- Directories with multiple export files
+
+</details>
+
+<details>
+<summary><strong>📋 Click to expand: ChatGPT-Specific Arguments</strong></summary>
+
+#### Parameters
+```bash
+--export-path PATH           # Path to ChatGPT export file (.html/.zip) or directory (default: ./chatgpt_export)
+--separate-messages         # Process each message separately instead of concatenated conversations
+--chunk-size N              # Text chunk size (default: 512)
+--chunk-overlap N           # Overlap between chunks (default: 128)
+```
+
+#### Example Commands
+```bash
+# Basic usage with HTML export
+python -m apps.chatgpt_rag --export-path conversations.html
+
+# Process ZIP archive from ChatGPT
+python -m apps.chatgpt_rag --export-path chatgpt_export.zip
+
+# Search with specific query
+python -m apps.chatgpt_rag --export-path chatgpt_data.html --query "Python programming help"
+
+# Process individual messages for fine-grained search
+python -m apps.chatgpt_rag --separate-messages --export-path chatgpt_export.html
+
+# Process directory containing multiple exports
+python -m apps.chatgpt_rag --export-path ./chatgpt_exports/ --max-items 1000
+```
+
+</details>
+
+<details>
+<summary><strong>💡 Click to expand: Example queries you can try</strong></summary>
+
+Once your ChatGPT conversations are indexed, you can search with queries like:
+- "What did I ask ChatGPT about Python programming?"
+- "Show me conversations about machine learning algorithms"
+- "Find discussions about web development frameworks"
+- "What coding advice did ChatGPT give me?"
+- "Search for conversations about debugging techniques"
+- "Find ChatGPT's recommendations for learning resources"
+
+</details>
+
+### 🤖 Claude Chat History: Your Personal AI Conversation Archive!
+
+Transform your Claude conversations into a searchable knowledge base! Search through all your Claude discussions about coding, research, brainstorming, and more.
+
+```bash
+python -m apps.claude_rag --export-path claude_export.json --query "What did I ask about Python dictionaries?"
+```
+
+**Unlock your AI conversation history.** Never lose track of valuable insights from your Claude discussions again.
+
+<details>
+<summary><strong>📋 Click to expand: How to Export Claude Data</strong></summary>
+
+**Step-by-step export process:**
+
+1. **Open Claude** in your browser
+2. **Navigate to Settings** (look for gear icon or settings menu)
+3. **Find Export/Download** options in your account settings
+4. **Download conversation data** (usually in JSON format)
+5. **Place the file** in your project directory
+
+*Note: Claude export methods may vary depending on the interface you're using. Check Claude's help documentation for the most current export instructions.*
+
+**Supported formats:**
+- `.json` files (recommended)
+- `.zip` archives containing JSON data
+- Directories with multiple export files
+
+</details>
+
+<details>
+<summary><strong>📋 Click to expand: Claude-Specific Arguments</strong></summary>
+
+#### Parameters
+```bash
+--export-path PATH           # Path to Claude export file (.json/.zip) or directory (default: ./claude_export)
+--separate-messages         # Process each message separately instead of concatenated conversations
+--chunk-size N              # Text chunk size (default: 512)
+--chunk-overlap N           # Overlap between chunks (default: 128)
+```
+
+#### Example Commands
+```bash
+# Basic usage with JSON export
+python -m apps.claude_rag --export-path my_claude_conversations.json
+
+# Process ZIP archive from Claude
+python -m apps.claude_rag --export-path claude_export.zip
+
+# Search with specific query
+python -m apps.claude_rag --export-path claude_data.json --query "machine learning advice"
+
+# Process individual messages for fine-grained search
+python -m apps.claude_rag --separate-messages --export-path claude_export.json
+
+# Process directory containing multiple exports
+python -m apps.claude_rag --export-path ./claude_exports/ --max-items 1000
+```
+
+</details>
+
+<details>
+<summary><strong>💡 Click to expand: Example queries you can try</strong></summary>
+
+Once your Claude conversations are indexed, you can search with queries like:
+- "What did I ask Claude about Python programming?"
+- "Show me conversations about machine learning algorithms"
+- "Find discussions about software architecture patterns"
+- "What debugging advice did Claude give me?"
+- "Search for conversations about data structures"
+- "Find Claude's recommendations for learning resources"
+
+</details>
+
+### 💬 iMessage History: Your Personal Conversation Archive!
+
+Transform your iMessage conversations into a searchable knowledge base! Search through all your text messages, group chats, and conversations with friends, family, and colleagues.
+
+```bash
+python -m apps.imessage_rag --query "What did we discuss about the weekend plans?"
+```
+
+**Unlock your message history.** Never lose track of important conversations, shared links, or memorable moments from your iMessage history.
+
+<details>
+<summary><strong>📋 Click to expand: How to Access iMessage Data</strong></summary>
+
+**iMessage data location:**
+
+iMessage conversations are stored in a SQLite database on your Mac at:
+```
+~/Library/Messages/chat.db
+```
+
+**Important setup requirements:**
+
+1. **Grant Full Disk Access** to your terminal or IDE:
+   - Open **System Preferences** → **Security & Privacy** → **Privacy**
+   - Select **Full Disk Access** from the left sidebar
+   - Click the **+** button and add your terminal app (Terminal, iTerm2) or IDE (VS Code, etc.)
+   - Restart your terminal/IDE after granting access
+
+2. **Alternative: Use a backup database**
+   - If you have Time Machine backups or manual copies of the database
+   - Use `--db-path` to specify a custom location
+
+**Supported formats:**
+- Direct access to `~/Library/Messages/chat.db` (default)
+- Custom database path with `--db-path`
+- Works with backup copies of the database
+
+</details>
+
+<details>
+<summary><strong>📋 Click to expand: iMessage-Specific Arguments</strong></summary>
+
+#### Parameters
+```bash
+--db-path PATH                    # Path to chat.db file (default: ~/Library/Messages/chat.db)
+--concatenate-conversations       # Group messages by conversation (default: True)
+--no-concatenate-conversations    # Process each message individually
+--chunk-size N                    # Text chunk size (default: 1000)
+--chunk-overlap N                 # Overlap between chunks (default: 200)
+```
+
+#### Example Commands
+```bash
+# Basic usage (requires Full Disk Access)
+python -m apps.imessage_rag
+
+# Search with specific query
+python -m apps.imessage_rag --query "family dinner plans"
+
+# Use custom database path
+python -m apps.imessage_rag --db-path /path/to/backup/chat.db
+
+# Process individual messages instead of conversations
+python -m apps.imessage_rag --no-concatenate-conversations
+
+# Limit processing for testing
+python -m apps.imessage_rag --max-items 100 --query "weekend"
+```
+
+</details>
+
+<details>
+<summary><strong>💡 Click to expand: Example queries you can try</strong></summary>
+
+Once your iMessage conversations are indexed, you can search with queries like:
+- "What did we discuss about vacation plans?"
+- "Find messages about restaurant recommendations"
+- "Show me conversations with John about the project"
+- "Search for shared links about technology"
+- "Find group chat discussions about weekend events"
+- "What did mom say about the family gathering?"
 
 </details>
 
