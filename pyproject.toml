@@ -22,7 +22,8 @@ dependencies = [
     "sglang",
     "ollama",
     "requests>=2.25.0",
-    "sentence-transformers>=2.2.0",
+    "sentence-transformers>=2.2.0,<3.0",
+    "transformers<4.43",
     "openai>=1.0.0",
     # PDF parsing dependencies - essential for document processing
     "PyPDF2>=3.0.0",
