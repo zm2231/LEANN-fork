@@ -2241,12 +2241,12 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyzmq", specifier = ">=23.0.0" },
     { name = "requests", specifier = ">=2.25.0" },
-    { name = "sentence-transformers", specifier = ">=2.2.0,<3.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "torch", marker = "extra == 'colab'", specifier = ">=2.0.0,<3.0.0" },
     { name = "tqdm", specifier = ">=4.60.0" },
-    { name = "transformers", specifier = ">=4.30.0,<4.43" },
-    { name = "transformers", marker = "extra == 'colab'", specifier = ">=4.30.0,<4.43" },
+    { name = "transformers", specifier = ">=4.30.0,<4.46" },
+    { name = "transformers", marker = "extra == 'colab'", specifier = ">=4.30.0,<4.46" },
 ]
 provides-extras = ["colab"]
 
@@ -2366,12 +2366,12 @@ requires-dist = [
     { name = "pypdfium2", specifier = ">=4.30.0" },
     { name = "python-docx", marker = "extra == 'documents'", specifier = ">=0.8.11" },
     { name = "requests", specifier = ">=2.25.0" },
-    { name = "sentence-transformers", specifier = ">=2.2.0,<3.0" },
+    { name = "sentence-transformers", specifier = ">=3.0.0" },
     { name = "sglang" },
     { name = "torch" },
     { name = "torchvision", specifier = ">=0.23.0" },
     { name = "tqdm" },
-    { name = "transformers", specifier = "<4.43" },
+    { name = "transformers", specifier = "<4.46" },
     { name = "tree-sitter", specifier = ">=0.20.0" },
     { name = "tree-sitter-c-sharp", specifier = ">=0.20.0" },
     { name = "tree-sitter-java", specifier = ">=0.20.0" },
@@ -5346,11 +5346,10 @@ wheels = [
 
 [[package]]
 name = "sentence-transformers"
-version = "2.7.0"
+version = "5.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "huggingface-hub" },
-    { name = "numpy" },
     { name = "pillow" },
     { name = "scikit-learn", version = "1.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
@@ -5360,10 +5359,11 @@ dependencies = [
     { name = "torch" },
     { name = "tqdm" },
     { name = "transformers" },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/65/8d/8d6147fdef0ed7aeff3dab487bd17619b512afab845eb295faa08b20a5d0/sentence_transformers-2.7.0.tar.gz", hash = "sha256:2f7df99d1c021dded471ed2d079e9d1e4fc8e30ecb06f957be060511b36f24ea", size = 128393 }
+sdist = { url = "https://files.pythonhosted.org/packages/21/47/7d61a19ba7e6b5f36f0ffff5bbf032a1c1913612caac611e12383069eda0/sentence_transformers-5.1.1.tar.gz", hash = "sha256:8af3f844b2ecf9a6c2dfeafc2c02938a87f61202b54329d70dfd7dfd7d17a84e", size = 374434 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/2c/bd95032aeb087b0706596af0a4518c4bfe0439a1bb149048ece18b617766/sentence_transformers-2.7.0-py3-none-any.whl", hash = "sha256:6a7276b05a95931581bbfa4ba49d780b2cf6904fa4a171ec7fd66c343f761c98", size = 171480 },
+    { url = "https://files.pythonhosted.org/packages/48/21/4670d03ab8587b0ab6f7d5fa02a95c3dd6b1f39d0e40e508870201f3d76c/sentence_transformers-5.1.1-py3-none-any.whl", hash = "sha256:5ed544629eafe89ca668a8910ebff96cf0a9c5254ec14b05c66c086226c892fd", size = 486574 },
 ]
 
 [[package]]
