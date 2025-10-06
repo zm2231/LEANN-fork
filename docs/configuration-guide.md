@@ -455,5 +455,5 @@ Conclusion:
 
 - [Lessons Learned Developing LEANN](https://yichuan-w.github.io/blog/lessons_learned_in_dev_leann/)
 - [LEANN Technical Paper](https://arxiv.org/abs/2506.08276)
-- [DiskANN Original Paper](https://papers.nips.cc/paper/2019/file/09853c7fb1d3f8ee67a61b6bf4a7f8e6-Paper.pdf)
+- [DiskANN Original Paper](https://suhasjs.github.io/files/diskann_neurips19.pdf)
 - [SSD-based Graph Partitioning](https://github.com/SonglinLife/SSD_BASED_PLAN)
