@@ -2241,12 +2241,12 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyzmq", specifier = ">=23.0.0" },
     { name = "requests", specifier = ">=2.25.0" },
-    { name = "sentence-transformers", specifier = ">=2.2.0" },
+    { name = "sentence-transformers", specifier = ">=2.2.0,<3.0" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "torch", marker = "extra == 'colab'", specifier = ">=2.0.0,<3.0.0" },
     { name = "tqdm", specifier = ">=4.60.0" },
-    { name = "transformers", specifier = ">=4.30.0" },
-    { name = "transformers", marker = "extra == 'colab'", specifier = ">=4.30.0,<5.0.0" },
+    { name = "transformers", specifier = ">=4.30.0,<4.43" },
+    { name = "transformers", marker = "extra == 'colab'", specifier = ">=4.30.0,<4.43" },
 ]
 provides-extras = ["colab"]
 
