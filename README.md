@@ -20,7 +20,7 @@ LEANN is an innovative vector database that democratizes personal AI. Transform 
 
 LEANN achieves this through *graph-based selective recomputation* with *high-degree preserving pruning*, computing embeddings on-demand instead of storing them all. [Illustration Fig →](#️-architecture--how-it-works) | [Paper →](https://arxiv.org/abs/2506.08276)
 
-**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](#-wechat-detective-unlock-your-golden-memories), [iMessage](#-imessage-history-your-personal-conversation-archive)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](#-chatgpt-chat-history-your-personal-ai-conversation-archive), [Claude](#-claude-chat-history-your-personal-ai-conversation-archive)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
+**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](#-wechat-detective-unlock-your-golden-memories), [iMessage](#-imessage-history-your-personal-conversation-archive)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](#-chatgpt-chat-history-your-personal-ai-conversation-archive), [Claude](#-claude-chat-history-your-personal-ai-conversation-archive)), **[live data](#mcp-integration-rag-on-live-data-from-any-platform)** ([Slack](#slack-messages-search-your-team-conversations), [Twitter](#twitter-bookmarks-your-personal-tweet-library)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
 
 
 \* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
@@ -72,8 +72,9 @@ uv venv
 source .venv/bin/activate
 uv pip install leann
 ```
+
 <!--
-> Low-resource? See “Low-resource setups” in the [Configuration Guide](docs/configuration-guide.md#low-resource-setups). -->
+> Low-resource? See "Low-resource setups" in the [Configuration Guide](docs/configuration-guide.md#low-resource-setups). -->
 
 <details>
 <summary>
@@ -176,7 +177,7 @@ response = chat.ask("How much storage does LEANN save?", top_k=1)
 
 ## RAG on Everything!
 
-LEANN supports RAG on various data sources including documents (`.pdf`, `.txt`, `.md`), Apple Mail, Google Search History, WeChat, ChatGPT conversations, Claude conversations, iMessage conversations, and more.
+LEANN supports RAG on various data sources including documents (`.pdf`, `.txt`, `.md`), Apple Mail, Google Search History, WeChat, ChatGPT conversations, Claude conversations, iMessage conversations, and **live data from any platform through MCP (Model Context Protocol) servers** - including Slack, Twitter, and more.
 
 
 
@@ -774,6 +775,155 @@ Once your iMessage conversations are indexed, you can search with queries like:
 
 </details>
 
+### MCP Integration: RAG on Live Data from Any Platform
+
+**NEW!** Connect to live data sources through the Model Context Protocol (MCP). LEANN now supports real-time RAG on platforms like Slack, Twitter, and more through standardized MCP servers.
+
+**Key Benefits:**
+- **Live Data Access**: Fetch real-time data without manual exports
+- **Standardized Protocol**: Use any MCP-compatible server
+- **Easy Extension**: Add new platforms with minimal code
+- **Secure Access**: MCP servers handle authentication
+
+<details>
+<summary><strong>Slack Messages: Search Your Team Conversations</strong></summary>
+
+Transform your Slack workspace into a searchable knowledge base! Find discussions, decisions, and shared knowledge across all your channels.
+
+```bash
+# Test MCP server connection
+python -m apps.slack_rag --mcp-server "slack-mcp-server" --test-connection
+
+# Index and search Slack messages
+python -m apps.slack_rag \
+  --mcp-server "slack-mcp-server" \
+  --workspace-name "my-team" \
+  --channels general dev-team random \
+  --query "What did we decide about the product launch?"
+```
+
+**Setup Requirements:**
+1. Install a Slack MCP server (e.g., `npm install -g slack-mcp-server`)
+2. Create a Slack App and get API credentials:
+   - Go to [api.slack.com/apps](https://api.slack.com/apps) and create a new app
+   - Under "OAuth & Permissions", add these Bot Token Scopes: `channels:read`, `channels:history`, `groups:read`, `groups:history`, `im:read`, `im:history`, `mpim:read`, `mpim:history`
+   - Install the app to your workspace and copy the "Bot User OAuth Token" (starts with `xoxb-`)
+   - Under "App-Level Tokens", create a token with `connections:write` scope (starts with `xapp-`)
+   ```bash
+   export SLACK_BOT_TOKEN="xoxb-your-bot-token"
+   export SLACK_APP_TOKEN="xapp-your-app-token"
+   ```
+3. Test connection with `--test-connection` flag
+
+**Arguments:**
+- `--mcp-server`: Command to start the Slack MCP server
+- `--workspace-name`: Slack workspace name for organization
+- `--channels`: Specific channels to index (optional)
+- `--concatenate-conversations`: Group messages by channel (default: true)
+- `--max-messages-per-channel`: Limit messages per channel (default: 100)
+
+</details>
+
+<details>
+<summary><strong>Twitter Bookmarks: Your Personal Tweet Library</strong></summary>
+
+Search through your Twitter bookmarks! Find that perfect article, thread, or insight you saved for later.
+
+```bash
+# Test MCP server connection
+python -m apps.twitter_rag --mcp-server "twitter-mcp-server" --test-connection
+
+# Index and search Twitter bookmarks
+python -m apps.twitter_rag \
+  --mcp-server "twitter-mcp-server" \
+  --max-bookmarks 1000 \
+  --query "What AI articles did I bookmark about machine learning?"
+```
+
+**Setup Requirements:**
+1. Install a Twitter MCP server (e.g., `npm install -g twitter-mcp-server`)
+2. Get Twitter API credentials:
+   - Apply for a Twitter Developer Account at [developer.twitter.com](https://developer.twitter.com)
+   - Create a new app in the Twitter Developer Portal
+   - Generate API keys and access tokens with "Read" permissions
+   - For bookmarks access, you may need Twitter API v2 with appropriate scopes
+   ```bash
+   export TWITTER_API_KEY="your-api-key"
+   export TWITTER_API_SECRET="your-api-secret"
+   export TWITTER_ACCESS_TOKEN="your-access-token"
+   export TWITTER_ACCESS_TOKEN_SECRET="your-access-token-secret"
+   ```
+3. Test connection with `--test-connection` flag
+
+**Arguments:**
+- `--mcp-server`: Command to start the Twitter MCP server
+- `--username`: Filter bookmarks by username (optional)
+- `--max-bookmarks`: Maximum bookmarks to fetch (default: 1000)
+- `--no-tweet-content`: Exclude tweet content, only metadata
+- `--no-metadata`: Exclude engagement metadata
+
+</details>
+
+<details>
+<summary><strong>💡 Click to expand: Example queries you can try</strong></summary>
+
+**Slack Queries:**
+- "What did the team discuss about the project deadline?"
+- "Find messages about the new feature launch"
+- "Show me conversations about budget planning"
+- "What decisions were made in the dev-team channel?"
+
+**Twitter Queries:**
+- "What AI articles did I bookmark last month?"
+- "Find tweets about machine learning techniques"
+- "Show me bookmarked threads about startup advice"
+- "What Python tutorials did I save?"
+
+</details>
+
+<details>
+<summary><strong>🔧 Using MCP with CLI Commands</strong></summary>
+
+**Want to use MCP data with regular LEANN CLI?** You can combine MCP apps with CLI commands:
+
+```bash
+# Step 1: Use MCP app to fetch and index data
+python -m apps.slack_rag --mcp-server "slack-mcp-server" --workspace-name "my-team"
+
+# Step 2: The data is now indexed and available via CLI
+leann search slack_messages "project deadline"
+leann ask slack_messages "What decisions were made about the product launch?"
+
+# Same for Twitter bookmarks
+python -m apps.twitter_rag --mcp-server "twitter-mcp-server"
+leann search twitter_bookmarks "machine learning articles"
+```
+
+**MCP vs Manual Export:**
+- **MCP**: Live data, automatic updates, requires server setup
+- **Manual Export**: One-time setup, works offline, requires manual data export
+
+</details>
+
+<details>
+<summary><strong>🔧 Adding New MCP Platforms</strong></summary>
+
+Want to add support for other platforms? LEANN's MCP integration is designed for easy extension:
+
+1. **Find or create an MCP server** for your platform
+2. **Create a reader class** following the pattern in `apps/slack_data/slack_mcp_reader.py`
+3. **Create a RAG application** following the pattern in `apps/slack_rag.py`
+4. **Test and contribute** back to the community!
+
+**Popular MCP servers to explore:**
+- GitHub repositories and issues
+- Discord messages
+- Notion pages
+- Google Drive documents
+- And many more in the MCP ecosystem!
+
+</details>
+
 ### 🚀 Claude Code Integration: Transform Your Development Workflow!
 
 <details>
@@ -805,7 +955,7 @@ Try our fully agentic pipeline with auto query rewriting, semantic search planni
 
 **🔥 Ready to supercharge your coding?** [Complete Setup Guide →](packages/leann-mcp/README.md)
 
-## 🖥️ Command Line Interface
+## Command Line Interface
 
 LEANN includes a powerful CLI for document processing and search. Perfect for quick document indexing and interactive chat.
 
@@ -1047,7 +1197,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 Core Contributors: [Yichuan Wang](https://yichuan-w.github.io/) & [Zhifei Li](https://github.com/andylizf).
 
-Active Contributors: [Gabriel Dehan](https://github.com/gabriel-dehan)
+Active Contributors: [Gabriel Dehan](https://github.com/gabriel-dehan), [Aakash Suresh](https://github.com/ASuresh0524)
 
 
 We welcome more contributors! Feel free to open issues or submit PRs.
