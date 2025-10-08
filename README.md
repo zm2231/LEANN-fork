@@ -875,7 +875,7 @@ python -m apps.twitter_rag \
 - "Show me bookmarked threads about startup advice"
 - "What Python tutorials did I save?"
 
-<details>
+</details>
 <summary><strong>🔧 Using MCP with CLI Commands</strong></summary>
 
 **Want to use MCP data with regular LEANN CLI?** You can combine MCP apps with CLI commands:
