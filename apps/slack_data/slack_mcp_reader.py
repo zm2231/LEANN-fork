@@ -29,6 +29,8 @@ class SlackMCPReader:
         workspace_name: Optional[str] = None,
         concatenate_conversations: bool = True,
         max_messages_per_conversation: int = 100,
+        max_retries: int = 5,
+        retry_delay: float = 2.0,
     ):
         """
         Initialize the Slack MCP Reader.
@@ -38,11 +40,15 @@ class SlackMCPReader:
             workspace_name: Optional workspace name to filter messages
             concatenate_conversations: Whether to group messages by channel/thread
             max_messages_per_conversation: Maximum messages to include per conversation
+            max_retries: Maximum number of retries for failed operations
+            retry_delay: Initial delay between retries in seconds
         """
         self.mcp_server_command = mcp_server_command
         self.workspace_name = workspace_name
         self.concatenate_conversations = concatenate_conversations
         self.max_messages_per_conversation = max_messages_per_conversation
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         self.mcp_process = None
 
     async def start_mcp_server(self):
@@ -110,11 +116,73 @@ class SlackMCPReader:
 
         return response.get("result", {}).get("tools", [])
 
+    def _is_cache_sync_error(self, error: dict) -> bool:
+        """Check if the error is related to users cache not being ready."""
+        if isinstance(error, dict):
+            message = error.get("message", "").lower()
+            return (
+                "users cache is not ready" in message or "sync process is still running" in message
+            )
+        return False
+
+    async def _retry_with_backoff(self, func, *args, **kwargs):
+        """Retry a function with exponential backoff, especially for cache sync issues."""
+        last_exception = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+
+                # Check if this is a cache sync error
+                error_dict = {}
+                if hasattr(e, "args") and e.args and isinstance(e.args[0], dict):
+                    error_dict = e.args[0]
+                elif "Failed to fetch messages" in str(e):
+                    # Try to extract error from the exception message
+                    import re
+
+                    match = re.search(r"'error':\s*(\{[^}]+\})", str(e))
+                    if match:
+                        try:
+                            error_dict = eval(match.group(1))
+                        except (ValueError, SyntaxError, NameError):
+                            pass
+                    else:
+                        # Try alternative format
+                        match = re.search(r"Failed to fetch messages:\s*(\{[^}]+\})", str(e))
+                        if match:
+                            try:
+                                error_dict = eval(match.group(1))
+                            except (ValueError, SyntaxError, NameError):
+                                pass
+
+                if self._is_cache_sync_error(error_dict):
+                    if attempt < self.max_retries:
+                        delay = self.retry_delay * (2**attempt)  # Exponential backoff
+                        logger.info(
+                            f"Cache sync not ready, waiting {delay:.1f}s before retry {attempt + 1}/{self.max_retries}"
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        logger.warning(
+                            f"Cache sync still not ready after {self.max_retries} retries, giving up"
+                        )
+                        break
+                else:
+                    # Not a cache sync error, don't retry
+                    break
+
+        # If we get here, all retries failed or it's not a retryable error
+        raise last_exception
+
     async def fetch_slack_messages(
         self, channel: Optional[str] = None, limit: int = 100
     ) -> list[dict[str, Any]]:
         """
-        Fetch Slack messages using MCP tools.
+        Fetch Slack messages using MCP tools with retry logic for cache sync issues.
 
         Args:
             channel: Optional channel name to filter messages
@@ -123,32 +191,59 @@ class SlackMCPReader:
         Returns:
             List of message dictionaries
         """
+        return await self._retry_with_backoff(self._fetch_slack_messages_impl, channel, limit)
+
+    async def _fetch_slack_messages_impl(
+        self, channel: Optional[str] = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        """
+        Internal implementation of fetch_slack_messages without retry logic.
+        """
         # This is a generic implementation - specific MCP servers may have different tool names
         # Common tool names might be: 'get_messages', 'list_messages', 'fetch_channel_history'
 
         tools = await self.list_available_tools()
+        logger.info(f"Available tools: {[tool.get('name') for tool in tools]}")
         message_tool = None
 
-        # Look for a tool that can fetch messages
+        # Look for a tool that can fetch messages - prioritize conversations_history
+        message_tool = None
+
+        # First, try to find conversations_history specifically
         for tool in tools:
             tool_name = tool.get("name", "").lower()
-            if any(
-                keyword in tool_name
-                for keyword in ["message", "history", "channel", "conversation"]
-            ):
+            if "conversations_history" in tool_name:
                 message_tool = tool
+                logger.info(f"Found conversations_history tool: {tool}")
                 break
+
+        # If not found, look for other message-fetching tools
+        if not message_tool:
+            for tool in tools:
+                tool_name = tool.get("name", "").lower()
+                if any(
+                    keyword in tool_name
+                    for keyword in ["conversations_search", "message", "history"]
+                ):
+                    message_tool = tool
+                    break
 
         if not message_tool:
             raise RuntimeError("No message fetching tool found in MCP server")
 
         # Prepare tool call parameters
-        tool_params = {"limit": limit}
+        tool_params = {"limit": "180d"}  # Use 180 days to get older messages
         if channel:
-            # Try common parameter names for channel specification
-            for param_name in ["channel", "channel_id", "channel_name"]:
-                tool_params[param_name] = channel
-                break
+            # For conversations_history, use channel_id parameter
+            if message_tool["name"] == "conversations_history":
+                tool_params["channel_id"] = channel
+            else:
+                # Try common parameter names for channel specification
+                for param_name in ["channel", "channel_id", "channel_name"]:
+                    tool_params[param_name] = channel
+                    break
+
+        logger.info(f"Tool parameters: {tool_params}")
 
         fetch_request = {
             "jsonrpc": "2.0",
@@ -170,8 +265,8 @@ class SlackMCPReader:
                 try:
                     messages = json.loads(content["text"])
                 except json.JSONDecodeError:
-                    # If not JSON, treat as plain text
-                    messages = [{"text": content["text"], "channel": channel or "unknown"}]
+                    # If not JSON, try to parse as CSV format (Slack MCP server format)
+                    messages = self._parse_csv_messages(content["text"], channel)
             else:
                 messages = result["content"]
         else:
@@ -179,6 +274,56 @@ class SlackMCPReader:
             messages = result.get("messages", [result])
 
         return messages if isinstance(messages, list) else [messages]
+
+    def _parse_csv_messages(self, csv_text: str, channel: str) -> list[dict[str, Any]]:
+        """Parse CSV format messages from Slack MCP server."""
+        import csv
+        import io
+
+        messages = []
+        try:
+            # Split by lines and process each line as a CSV row
+            lines = csv_text.strip().split("\n")
+            if not lines:
+                return messages
+
+            # Skip header line if it exists
+            start_idx = 0
+            if lines[0].startswith("MsgID,UserID,UserName"):
+                start_idx = 1
+
+            for line in lines[start_idx:]:
+                if not line.strip():
+                    continue
+
+                # Parse CSV line
+                reader = csv.reader(io.StringIO(line))
+                try:
+                    row = next(reader)
+                    if len(row) >= 7:  # Ensure we have enough columns
+                        message = {
+                            "ts": row[0],
+                            "user": row[1],
+                            "username": row[2],
+                            "real_name": row[3],
+                            "channel": row[4],
+                            "thread_ts": row[5],
+                            "text": row[6],
+                            "time": row[7] if len(row) > 7 else "",
+                            "reactions": row[8] if len(row) > 8 else "",
+                            "cursor": row[9] if len(row) > 9 else "",
+                        }
+                        messages.append(message)
+                except Exception as e:
+                    logger.warning(f"Failed to parse CSV line: {line[:100]}... Error: {e}")
+                    continue
+
+        except Exception as e:
+            logger.warning(f"Failed to parse CSV messages: {e}")
+            # Fallback: treat entire text as one message
+            messages = [{"text": csv_text, "channel": channel or "unknown"}]
+
+        return messages
 
     def _format_message(self, message: dict[str, Any]) -> str:
         """Format a single message for indexing."""
@@ -251,6 +396,40 @@ class SlackMCPReader:
 
         return "\n".join(content_parts)
 
+    async def get_all_channels(self) -> list[str]:
+        """Get list of all available channels."""
+        try:
+            channels_list_request = {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "channels_list", "arguments": {}},
+            }
+            channels_response = await self.send_mcp_request(channels_list_request)
+            if "result" in channels_response:
+                result = channels_response["result"]
+                if "content" in result and isinstance(result["content"], list):
+                    content = result["content"][0] if result["content"] else {}
+                    if "text" in content:
+                        # Parse the channels from the response
+                        channels = []
+                        lines = content["text"].split("\n")
+                        for line in lines:
+                            if line.strip() and ("#" in line or "C" in line[:10]):
+                                # Extract channel ID or name
+                                parts = line.split()
+                                for part in parts:
+                                    if part.startswith("C") and len(part) > 5:
+                                        channels.append(part)
+                                    elif part.startswith("#"):
+                                        channels.append(part[1:])  # Remove #
+                        logger.info(f"Found {len(channels)} channels: {channels}")
+                        return channels
+            return []
+        except Exception as e:
+            logger.warning(f"Failed to get channels list: {e}")
+            return []
+
     async def read_slack_data(self, channels: Optional[list[str]] = None) -> list[str]:
         """
         Read Slack data and return formatted text chunks.
@@ -287,36 +466,33 @@ class SlackMCPReader:
                         logger.warning(f"Failed to fetch messages from channel {channel}: {e}")
                         continue
             else:
-                # Fetch from all available channels/conversations
-                # This is a simplified approach - real implementation would need to
-                # discover available channels first
-                try:
-                    messages = await self.fetch_slack_messages(limit=1000)
-                    if messages:
-                        # Group messages by channel if concatenating
-                        if self.concatenate_conversations:
-                            channel_messages = {}
-                            for message in messages:
-                                channel = message.get(
-                                    "channel", message.get("channel_name", "general")
-                                )
-                                if channel not in channel_messages:
-                                    channel_messages[channel] = []
-                                channel_messages[channel].append(message)
+                # Fetch from all available channels
+                logger.info("Fetching from all available channels...")
+                all_channels = await self.get_all_channels()
 
-                            # Create concatenated content for each channel
-                            for channel, msgs in channel_messages.items():
-                                text_content = self._create_concatenated_content(msgs, channel)
+                if not all_channels:
+                    # Fallback to common channel names if we can't get the list
+                    all_channels = ["general", "random", "announcements", "C0GN5BX0F"]
+                    logger.info(f"Using fallback channels: {all_channels}")
+
+                for channel in all_channels:
+                    try:
+                        logger.info(f"Searching channel: {channel}")
+                        messages = await self.fetch_slack_messages(channel=channel, limit=1000)
+                        if messages:
+                            if self.concatenate_conversations:
+                                text_content = self._create_concatenated_content(messages, channel)
                                 if text_content.strip():
                                     all_texts.append(text_content)
-                        else:
-                            # Process individual messages
-                            for message in messages:
-                                formatted_msg = self._format_message(message)
-                                if formatted_msg.strip():
-                                    all_texts.append(formatted_msg)
-                except Exception as e:
-                    logger.error(f"Failed to fetch messages: {e}")
+                            else:
+                                # Process individual messages
+                                for message in messages:
+                                    formatted_msg = self._format_message(message)
+                                    if formatted_msg.strip():
+                                        all_texts.append(formatted_msg)
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch messages from channel {channel}: {e}")
+                        continue
 
             return all_texts
 
