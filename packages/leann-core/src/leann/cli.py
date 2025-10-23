@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -1186,6 +1187,7 @@ Examples:
                 for doc in other_docs:
                     file_path = doc.metadata.get("file_path", "")
                     if file_filter(file_path):
+                        doc.metadata["source"] = file_path
                         filtered_docs.append(doc)
 
                 documents.extend(filtered_docs)
@@ -1290,7 +1292,10 @@ Examples:
                 nodes = parser.get_nodes_from_documents([doc])
 
                 for node in nodes:
-                    all_texts.append(node.get_content())
+                    text_with_source = (
+                        "Chunk source:" + source_path + "\n" + node.get_content().replace("\n", " ")
+                    )
+                    all_texts.append(text_with_source)
 
         print(f"Loaded {len(documents)} documents, {len(all_texts)} chunks")
         return all_texts
@@ -1388,8 +1393,10 @@ Examples:
             num_threads=args.num_threads,
         )
 
-        for chunk_text in all_texts:
-            builder.add_text(chunk_text)
+        for chunk_text_with_source in all_texts:
+            chunk_source = chunk_text_with_source.split("\n")[0].split(":")[1]
+            chunk_text = chunk_text_with_source.split("\n")[1]
+            builder.add_text(chunk_text, {"source": chunk_source})
 
         builder.build_index(index_path)
         print(f"Index built at {index_path}")
@@ -1511,6 +1518,7 @@ Examples:
         for i, result in enumerate(results, 1):
             print(f"{i}. Score: {result.score:.3f}")
             print(f"   {result.text[:200]}...")
+            print(f"   Source: {result.metadata.get('source', '')}")
             print()
 
     async def ask_questions(self, args):
@@ -1542,6 +1550,7 @@ Examples:
             llm_kwargs["thinking_budget"] = args.thinking_budget
 
         def _ask_once(prompt: str) -> None:
+            query_start_time = time.time()
             response = chat.ask(
                 prompt,
                 top_k=args.top_k,
@@ -1552,7 +1561,9 @@ Examples:
                 pruning_strategy=args.pruning_strategy,
                 llm_kwargs=llm_kwargs,
             )
+            query_completion_time = time.time() - query_start_time
             print(f"LEANN: {response}")
+            print(f"The query took {query_completion_time:.3f} seconds to finish")
 
         initial_query = (args.query or "").strip()
 
