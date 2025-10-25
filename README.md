@@ -1213,3 +1213,7 @@ This work is done at [**Berkeley Sky Computing Lab**](https://sky.cs.berkeley.ed
 <p align="center">
   Made with ❤️ by the Leann team
 </p>
+
+## 🤖 Explore LEANN with AI
+
+LEANN is indexed on [DeepWiki](https://deepwiki.com/yichuan-w/LEANN), so you can ask questions to LLMs using Deep Research to explore the codebase and get help to add new features.
