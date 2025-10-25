@@ -105,3 +105,6 @@ apps/multimodal/vision-based-pdf-multi-vector/multi-vector-colpali-native-weavia
 # The following line used to force-add a large demo PDF; remove it to satisfy pre-commit:
 # !apps/multimodal/vision-based-pdf-multi-vector/pdfs/2004.12832v2.pdf
 !apps/multimodal/vision-based-pdf-multi-vector/fig/*
+
+# AUR build directory (Arch Linux)
+paru-bin/
