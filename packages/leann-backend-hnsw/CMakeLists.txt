@@ -29,12 +29,25 @@ if(APPLE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 endif()
 
-# Use system ZeroMQ instead of building from source
+# Find ZMQ using pkg-config with IMPORTED_TARGET for automatic target creation
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(ZMQ REQUIRED libzmq)
+
+# On ARM64 macOS, ensure pkg-config finds ARM64 Homebrew packages first
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(ENV{PKG_CONFIG_PATH} "/opt/homebrew/lib/pkgconfig:/opt/homebrew/share/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+endif()
+
+pkg_check_modules(ZMQ REQUIRED IMPORTED_TARGET libzmq)
+
+# This creates PkgConfig::ZMQ target automatically with correct properties
+if(TARGET PkgConfig::ZMQ)
+    message(STATUS "Found and configured ZMQ target: PkgConfig::ZMQ")
+else()
+    message(FATAL_ERROR "pkg_check_modules did not create IMPORTED target for ZMQ.")
+endif()
 
 # Add cppzmq headers
-include_directories(third_party/cppzmq)
+include_directories(SYSTEM third_party/cppzmq)
 
 # Configure msgpack-c - disable boost dependency
 set(MSGPACK_USE_BOOST OFF CACHE BOOL "" FORCE)
