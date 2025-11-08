@@ -2,6 +2,7 @@
 # %%
 # uv pip install matplotlib qwen_vl_utils
 import os
+import json
 import re
 import sys
 from pathlib import Path
@@ -230,12 +231,18 @@ def _build_index(index_path: str, doc_vecs: list[Any], filepaths: list[str]) -> 
     return retriever
 
 
-def _load_retriever_if_index_exists(index_path: str, dim: int) -> Optional[LeannMultiVector]:
+def _load_retriever_if_index_exists(index_path: str) -> Optional[LeannMultiVector]:
     index_base = Path(index_path)
     # Rough heuristic: index dir exists AND meta+labels files exist
     meta = index_base.parent / f"{index_base.name}.meta.json"
     labels = index_base.parent / f"{index_base.name}.labels.json"
     if index_base.exists() and meta.exists() and labels.exists():
+        try:
+            with open(meta, "r", encoding="utf-8") as f:
+                meta_json = json.load(f)
+            dim = int(meta_json.get("dimensions", 128))
+        except Exception:
+            dim = 128
         return LeannMultiVector(index_path=index_path, dim=dim)
     return None
 
@@ -390,11 +397,7 @@ print(f"Using model={model_name}, device={device_str}, dtype={dtype}")
 # Step 3: Build or load index
 retriever: Optional[LeannMultiVector] = None
 if not REBUILD_INDEX:
-    try:
-        one_vec = _embed_images(model, processor, [images[0]])[0]
-        retriever = _load_retriever_if_index_exists(INDEX_PATH, dim=int(one_vec.shape[-1]))
-    except Exception:
-        retriever = None
+    retriever = _load_retriever_if_index_exists(INDEX_PATH)
 
 if retriever is None:
     doc_vecs = _embed_images(model, processor, images)
