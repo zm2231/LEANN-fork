@@ -10,6 +10,7 @@ flexible message processing options.
 import asyncio
 import json
 import logging
+import ast
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -146,7 +147,7 @@ class SlackMCPReader:
                     match = re.search(r"'error':\s*(\{[^}]+\})", str(e))
                     if match:
                         try:
-                            error_dict = eval(match.group(1))
+                            error_dict = ast.literal_eval(match.group(1))
                         except (ValueError, SyntaxError, NameError):
                             pass
                     else:
@@ -154,7 +155,7 @@ class SlackMCPReader:
                         match = re.search(r"Failed to fetch messages:\s*(\{[^}]+\})", str(e))
                         if match:
                             try:
-                                error_dict = eval(match.group(1))
+                                error_dict = ast.literal_eval(match.group(1))
                             except (ValueError, SyntaxError, NameError):
                                 pass
 
