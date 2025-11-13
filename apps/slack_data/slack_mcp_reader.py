@@ -7,10 +7,10 @@ for indexing in LEANN. It supports various Slack MCP server implementations and 
 flexible message processing options.
 """
 
+import ast
 import asyncio
 import json
 import logging
-import ast
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ class SlackMCPReader:
                     if match:
                         try:
                             error_dict = ast.literal_eval(match.group(1))
-                        except (ValueError, SyntaxError, NameError):
+                        except (ValueError, SyntaxError):
                             pass
                     else:
                         # Try alternative format
@@ -156,7 +156,7 @@ class SlackMCPReader:
                         if match:
                             try:
                                 error_dict = ast.literal_eval(match.group(1))
-                            except (ValueError, SyntaxError, NameError):
+                            except (ValueError, SyntaxError):
                                 pass
 
                 if self._is_cache_sync_error(error_dict):
