@@ -59,6 +59,7 @@ dependencies = [
     "torchvision>=0.23.0",
     "einops",
     "seaborn",
+    "docx2text"
 ]
 
 [project.optional-dependencies]
