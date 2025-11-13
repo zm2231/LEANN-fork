@@ -59,7 +59,6 @@ dependencies = [
     "torchvision>=0.23.0",
     "einops",
     "seaborn",
-    "docx2text"
 ]
 
 [project.optional-dependencies]
@@ -70,7 +69,8 @@ diskann = [
 # Add a new optional dependency group for document processing
 documents = [
     "beautifulsoup4>=4.13.0",  # For HTML parsing
-    "python-docx>=0.8.11",     # For Word documents
+    "python-docx>=0.8.11",     # For Word documents (creating/editing)
+    "docx2txt>=0.9",           # For Word documents (text extraction)
     "openpyxl>=3.1.0",         # For Excel files
     "pandas>=2.2.0",           # For data processing
 ]
