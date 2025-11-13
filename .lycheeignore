@@ -1,5 +1,0 @@
-# Exclude star-history API from link checking
-# This service is intermittently unavailable (503 errors)
-# but the link still works when the service is up
-.*api\.star-history\.com.*
-
