@@ -4,8 +4,10 @@ Consolidates all embedding computation logic using SentenceTransformer
 Preserves all optimization parameters to ensure performance
 """
 
+import json
 import logging
 import os
+import subprocess
 import time
 from typing import Any, Optional
 
@@ -40,6 +42,11 @@ EMBEDDING_MODEL_LIMITS = {
     "text-embedding-ada-002": 8192,
 }
 
+# Runtime cache for dynamically discovered token limits
+# Key: (model_name, base_url), Value: token_limit
+# Prevents repeated SDK/API calls for the same model
+_token_limit_cache: dict[tuple[str, str], int] = {}
+
 
 def get_model_token_limit(
     model_name: str,
@@ -49,6 +56,7 @@ def get_model_token_limit(
     """
     Get token limit for a given embedding model.
     Uses hybrid approach: dynamic discovery for Ollama, registry fallback for others.
+    Caches discovered limits to prevent repeated API/SDK calls.
 
     Args:
         model_name: Name of the embedding model
@@ -58,12 +66,33 @@ def get_model_token_limit(
     Returns:
         Token limit for the model in tokens
     """
+    # Check cache first to avoid repeated SDK/API calls
+    cache_key = (model_name, base_url or "")
+    if cache_key in _token_limit_cache:
+        cached_limit = _token_limit_cache[cache_key]
+        logger.debug(f"Using cached token limit for {model_name}: {cached_limit}")
+        return cached_limit
+
     # Try Ollama dynamic discovery if base_url provided
     if base_url:
         # Detect Ollama servers by port or "ollama" in URL
         if "11434" in base_url or "ollama" in base_url.lower():
             limit = _query_ollama_context_limit(model_name, base_url)
             if limit:
+                _token_limit_cache[cache_key] = limit
+                return limit
+
+        # Try LM Studio SDK discovery
+        if "1234" in base_url or "lmstudio" in base_url.lower() or "lm.studio" in base_url.lower():
+            # Convert HTTP to WebSocket URL
+            ws_url = base_url.replace("https://", "wss://").replace("http://", "ws://")
+            # Remove /v1 suffix if present
+            if ws_url.endswith("/v1"):
+                ws_url = ws_url[:-3]
+
+            limit = _query_lmstudio_context_limit(model_name, ws_url)
+            if limit:
+                _token_limit_cache[cache_key] = limit
                 return limit
 
     # Fallback to known model registry with version handling (from PR #154)
@@ -72,19 +101,25 @@ def get_model_token_limit(
 
     # Check exact match first
     if model_name in EMBEDDING_MODEL_LIMITS:
-        return EMBEDDING_MODEL_LIMITS[model_name]
+        limit = EMBEDDING_MODEL_LIMITS[model_name]
+        _token_limit_cache[cache_key] = limit
+        return limit
 
     # Check base name match
     if base_model_name in EMBEDDING_MODEL_LIMITS:
-        return EMBEDDING_MODEL_LIMITS[base_model_name]
+        limit = EMBEDDING_MODEL_LIMITS[base_model_name]
+        _token_limit_cache[cache_key] = limit
+        return limit
 
     # Check partial matches for common patterns
-    for known_model, limit in EMBEDDING_MODEL_LIMITS.items():
+    for known_model, registry_limit in EMBEDDING_MODEL_LIMITS.items():
         if known_model in base_model_name or base_model_name in known_model:
-            return limit
+            _token_limit_cache[cache_key] = registry_limit
+            return registry_limit
 
     # Default fallback
     logger.warning(f"Unknown model '{model_name}', using default {default} token limit")
+    _token_limit_cache[cache_key] = default
     return default
 
 
@@ -185,6 +220,91 @@ def _query_ollama_context_limit(model_name: str, base_url: str) -> Optional[int]
     return None
 
 
+def _query_lmstudio_context_limit(model_name: str, base_url: str) -> Optional[int]:
+    """
+    Query LM Studio SDK for model context length via Node.js subprocess.
+
+    Args:
+        model_name: Name of the LM Studio model
+        base_url: Base URL of the LM Studio server (WebSocket format, e.g., "ws://localhost:1234")
+
+    Returns:
+        Context limit in tokens if found, None otherwise
+    """
+    # Inline JavaScript using @lmstudio/sdk
+    # Note: Load model temporarily for metadata, then unload to respect JIT auto-evict
+    js_code = f"""
+    const {{ LMStudioClient }} = require('@lmstudio/sdk');
+    (async () => {{
+        try {{
+            const client = new LMStudioClient({{ baseUrl: '{base_url}' }});
+            const model = await client.embedding.load('{model_name}', {{ verbose: false }});
+            const contextLength = await model.getContextLength();
+            await model.unload();  // Unload immediately to respect JIT auto-evict settings
+            console.log(JSON.stringify({{ contextLength, identifier: '{model_name}' }}));
+        }} catch (error) {{
+            console.error(JSON.stringify({{ error: error.message }}));
+            process.exit(1);
+        }}
+    }})();
+    """
+
+    try:
+        # Set NODE_PATH to include global modules for @lmstudio/sdk resolution
+        env = os.environ.copy()
+
+        # Try to get npm global root (works with nvm, brew node, etc.)
+        try:
+            npm_root = subprocess.run(
+                ["npm", "root", "-g"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if npm_root.returncode == 0:
+                global_modules = npm_root.stdout.strip()
+                # Append to existing NODE_PATH if present
+                existing_node_path = env.get("NODE_PATH", "")
+                env["NODE_PATH"] = (
+                    f"{global_modules}:{existing_node_path}"
+                    if existing_node_path
+                    else global_modules
+                )
+        except Exception:
+            # If npm not available, continue with existing NODE_PATH
+            pass
+
+        result = subprocess.run(
+            ["node", "-e", js_code],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+
+        if result.returncode != 0:
+            logger.debug(f"LM Studio SDK error: {result.stderr}")
+            return None
+
+        data = json.loads(result.stdout)
+        context_length = data.get("contextLength")
+
+        if context_length and context_length > 0:
+            logger.info(f"LM Studio SDK detected {model_name} context length: {context_length}")
+            return context_length
+
+    except FileNotFoundError:
+        logger.debug("Node.js not found - install Node.js for LM Studio SDK features")
+    except subprocess.TimeoutExpired:
+        logger.debug("LM Studio SDK query timeout")
+    except json.JSONDecodeError:
+        logger.debug("LM Studio SDK returned invalid JSON")
+    except Exception as e:
+        logger.debug(f"LM Studio SDK query failed: {e}")
+
+    return None
+
+
 # Global model cache to avoid repeated loading
 _model_cache: dict[str, Any] = {}
 
@@ -232,6 +352,7 @@ def compute_embeddings(
             model_name,
             base_url=provider_options.get("base_url"),
             api_key=provider_options.get("api_key"),
+            provider_options=provider_options,
         )
     elif mode == "mlx":
         return compute_embeddings_mlx(texts, model_name)
@@ -241,6 +362,7 @@ def compute_embeddings(
             model_name,
             is_build=is_build,
             host=provider_options.get("host"),
+            provider_options=provider_options,
         )
     elif mode == "gemini":
         return compute_embeddings_gemini(texts, model_name, is_build=is_build)
@@ -579,6 +701,7 @@ def compute_embeddings_openai(
     model_name: str,
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
+    provider_options: Optional[dict[str, Any]] = None,
 ) -> np.ndarray:
     # TODO: @yichuan-w add progress bar only in build mode
     """Compute embeddings using OpenAI API"""
@@ -597,25 +720,36 @@ def compute_embeddings_openai(
             f"Found {invalid_count} empty/invalid text(s) in input. Upstream should filter before calling OpenAI."
         )
 
-    resolved_base_url = resolve_openai_base_url(base_url)
-    resolved_api_key = resolve_openai_api_key(api_key)
+    # Extract base_url and api_key from provider_options if not provided directly
+    provider_options = provider_options or {}
+    effective_base_url = base_url or provider_options.get("base_url")
+    effective_api_key = api_key or provider_options.get("api_key")
+
+    resolved_base_url = resolve_openai_base_url(effective_base_url)
+    resolved_api_key = resolve_openai_api_key(effective_api_key)
 
     if not resolved_api_key:
         raise RuntimeError("OPENAI_API_KEY environment variable not set")
 
-    # Cache OpenAI client
-    cache_key = f"openai_client::{resolved_base_url}"
-    if cache_key in _model_cache:
-        client = _model_cache[cache_key]
-    else:
-        client = openai.OpenAI(api_key=resolved_api_key, base_url=resolved_base_url)
-        _model_cache[cache_key] = client
-        logger.info("OpenAI client cached")
+    # Create OpenAI client
+    client = openai.OpenAI(api_key=resolved_api_key, base_url=resolved_base_url)
 
     logger.info(
         f"Computing embeddings for {len(texts)} texts using OpenAI API, model: '{model_name}'"
     )
     print(f"len of texts: {len(texts)}")
+
+    # Apply prompt template if provided
+    prompt_template = provider_options.get("prompt_template")
+
+    if prompt_template:
+        logger.warning(f"Applying prompt template: '{prompt_template}'")
+        texts = [f"{prompt_template}{text}" for text in texts]
+
+    # Query token limit and apply truncation
+    token_limit = get_model_token_limit(model_name, base_url=effective_base_url)
+    logger.info(f"Using token limit: {token_limit} for model '{model_name}'")
+    texts = truncate_to_token_limit(texts, token_limit)
 
     # OpenAI has limits on batch size and input length
     max_batch_size = 800  # Conservative batch size because the token limit is 300K
@@ -647,7 +781,15 @@ def compute_embeddings_openai(
         try:
             response = client.embeddings.create(model=model_name, input=batch_texts)
             batch_embeddings = [embedding.embedding for embedding in response.data]
-            all_embeddings.extend(batch_embeddings)
+
+            # Verify we got the expected number of embeddings
+            if len(batch_embeddings) != len(batch_texts):
+                logger.warning(
+                    f"Expected {len(batch_texts)} embeddings but got {len(batch_embeddings)}"
+                )
+
+            # Only take the number of embeddings that match the batch size
+            all_embeddings.extend(batch_embeddings[: len(batch_texts)])
         except Exception as e:
             logger.error(f"Batch {i} failed: {e}")
             raise
@@ -737,6 +879,7 @@ def compute_embeddings_ollama(
     model_name: str,
     is_build: bool = False,
     host: Optional[str] = None,
+    provider_options: Optional[dict[str, Any]] = None,
 ) -> np.ndarray:
     """
     Compute embeddings using Ollama API with true batch processing.
@@ -749,6 +892,7 @@ def compute_embeddings_ollama(
         model_name: Ollama model name (e.g., "nomic-embed-text", "mxbai-embed-large")
         is_build: Whether this is a build operation (shows progress bar)
         host: Ollama host URL (defaults to environment or http://localhost:11434)
+        provider_options: Optional provider-specific options (e.g., prompt_template)
 
     Returns:
         Normalized embeddings array, shape: (len(texts), embedding_dim)
@@ -884,6 +1028,14 @@ def compute_embeddings_ollama(
         batch_size = 32
 
     logger.info(f"Using batch size: {batch_size} for true batch processing")
+
+    # Apply prompt template if provided
+    provider_options = provider_options or {}
+    prompt_template = provider_options.get("prompt_template")
+
+    if prompt_template:
+        logger.warning(f"Applying prompt template: '{prompt_template}'")
+        texts = [f"{prompt_template}{text}" for text in texts]
 
     # Get model token limit and apply truncation before batching
     token_limit = get_model_token_limit(model_name, base_url=resolved_host)

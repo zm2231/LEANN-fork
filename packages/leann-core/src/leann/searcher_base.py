@@ -90,6 +90,7 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
         query: str,
         use_server_if_available: bool = True,
         zmq_port: int = 5557,
+        query_template: Optional[str] = None,
     ) -> np.ndarray:
         """
         Compute embedding for a query string.
@@ -98,10 +99,16 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
             query: The query string to embed
             zmq_port: ZMQ port for embedding server
             use_server_if_available: Whether to try using embedding server first
+            query_template: Optional prompt template to prepend to query
 
         Returns:
             Query embedding as numpy array
         """
+        # Apply query template BEFORE any computation path
+        # This ensures template is applied consistently for both server and fallback paths
+        if query_template:
+            query = f"{query_template}{query}"
+
         # Try to use embedding server if available and requested
         if use_server_if_available:
             try:
