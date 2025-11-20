@@ -16,11 +16,23 @@
   </a>
 </p>
 
+<div align="center">
+  <a href="https://forms.gle/rDbZf864gMNxhpTq8">
+    <img src="https://img.shields.io/badge/📣_Community_Survey-Help_Shape_v0.4-007ec6?style=for-the-badge&logo=google-forms&logoColor=white" alt="Take Survey">
+  </a>
+  <p>
+    We track <b>zero telemetry</b>. This survey is the ONLY way to tell us if you want <br>
+    <b>GPU Acceleration</b> or <b>More Integrations</b> next.<br>
+    👉 <a href="https://forms.gle/rDbZf864gMNxhpTq8"><b>Click here to cast your vote (2 mins)</b></a>
+  </p>
+</div>
+
 <h2 align="center" tabindex="-1" class="heading-element" dir="auto">
     The smallest vector index in the world. RAG Everything with LEANN!
 </h2>
 
 LEANN is an innovative vector database that democratizes personal AI. Transform your laptop into a powerful RAG system that can index and search through millions of documents while using **97% less storage** than traditional solutions **without accuracy loss**.
+
 
 LEANN achieves this through *graph-based selective recomputation* with *high-degree preserving pruning*, computing embeddings on-demand instead of storing them all. [Illustration Fig →](#️-architecture--how-it-works) | [Paper →](https://arxiv.org/abs/2506.08276)
 
