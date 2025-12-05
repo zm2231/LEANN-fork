@@ -90,6 +90,51 @@ VIDORE_V1_TASKS = {
     },
 }
 
+# Task name aliases (short names -> full names)
+TASK_ALIASES = {
+    "arxivqa": "VidoreArxivQARetrieval",
+    "docvqa": "VidoreDocVQARetrieval",
+    "infovqa": "VidoreInfoVQARetrieval",
+    "tabfquad": "VidoreTabfquadRetrieval",
+    "tatdqa": "VidoreTatdqaRetrieval",
+    "shiftproject": "VidoreShiftProjectRetrieval",
+    "syntheticdocqa_ai": "VidoreSyntheticDocQAAIRetrieval",
+    "syntheticdocqa_energy": "VidoreSyntheticDocQAEnergyRetrieval",
+    "syntheticdocqa_government": "VidoreSyntheticDocQAGovernmentReportsRetrieval",
+    "syntheticdocqa_healthcare": "VidoreSyntheticDocQAHealthcareIndustryRetrieval",
+}
+
+
+def normalize_task_name(task_name: str) -> str:
+    """Normalize task name (handle aliases)."""
+    task_name_lower = task_name.lower()
+    if task_name in VIDORE_V1_TASKS:
+        return task_name
+    if task_name_lower in TASK_ALIASES:
+        return TASK_ALIASES[task_name_lower]
+    # Try partial match
+    for alias, full_name in TASK_ALIASES.items():
+        if alias in task_name_lower or task_name_lower in alias:
+            return full_name
+    return task_name
+
+
+def get_safe_model_name(model_name: str) -> str:
+    """Get a safe model name for use in file paths."""
+    import hashlib
+    import os
+
+    # If it's a path, use basename or hash
+    if os.path.exists(model_name) and os.path.isdir(model_name):
+        # Use basename if it's reasonable, otherwise use hash
+        basename = os.path.basename(model_name.rstrip("/"))
+        if basename and len(basename) < 100 and not basename.startswith("."):
+            return basename
+        # Use hash for very long or problematic paths
+        return hashlib.md5(model_name.encode()).hexdigest()[:16]
+    # For HuggingFace model names, replace / with _
+    return model_name.replace("/", "_").replace(":", "_")
+
 
 def load_vidore_v1_data(
     dataset_path: str,
@@ -181,6 +226,9 @@ def evaluate_task(
     print(f"Evaluating task: {task_name}")
     print(f"{'=' * 80}")
 
+    # Normalize task name (handle aliases)
+    task_name = normalize_task_name(task_name)
+
     # Get task config
     if task_name not in VIDORE_V1_TASKS:
         raise ValueError(f"Unknown task: {task_name}. Available: {list(VIDORE_V1_TASKS.keys())}")
@@ -223,11 +271,13 @@ def evaluate_task(
     )
 
     # Build or load index
+    # Use safe model name for index path (different models need different indexes)
+    safe_model_name = get_safe_model_name(model_name)
     index_path_full = index_path if not use_fast_plaid else fast_plaid_index_path
     if index_path_full is None:
-        index_path_full = f"./indexes/{task_name}_{model_name}"
+        index_path_full = f"./indexes/{task_name}_{safe_model_name}"
         if use_fast_plaid:
-            index_path_full = f"./indexes/{task_name}_{model_name}_fastplaid"
+            index_path_full = f"./indexes/{task_name}_{safe_model_name}_fastplaid"
 
     index_or_retriever, corpus_ids_ordered = evaluator.build_index_from_corpus(
         corpus=corpus,
@@ -281,8 +331,7 @@ def main():
         "--model",
         type=str,
         default="colqwen2",
-        choices=["colqwen2", "colpali"],
-        help="Model to use",
+        help="Model to use: 'colqwen2', 'colpali', or path to a model directory (supports LoRA adapters)",
     )
     parser.add_argument(
         "--task",
@@ -350,11 +399,11 @@ def main():
 
     # Determine tasks to evaluate
     if args.task:
-        tasks_to_eval = [args.task]
+        tasks_to_eval = [normalize_task_name(args.task)]
     elif args.tasks.lower() == "all":
         tasks_to_eval = list(VIDORE_V1_TASKS.keys())
     else:
-        tasks_to_eval = [t.strip() for t in args.tasks.split(",")]
+        tasks_to_eval = [normalize_task_name(t.strip()) for t in args.tasks.split(",")]
 
     print(f"Tasks to evaluate: {tasks_to_eval}")
 
