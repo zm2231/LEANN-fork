@@ -423,7 +423,7 @@ python -m apps.colqwen_rag search my_index "your question here" --top-k 5
 - **ColQwen2** (`colqwen2`): Latest vision-language model with improved performance
 - **ColPali** (`colpali`): Proven multimodal retriever
 
-For detailed usage, see the [ColQwen Guide](COLQWEN_GUIDE.md).
+For detailed usage, see the [ColQwen Guide](docs/COLQWEN_GUIDE.md).
 
 </details>
 
