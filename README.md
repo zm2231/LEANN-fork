@@ -379,6 +379,54 @@ python -m apps.code_rag --repo-dir "./my_codebase" --query "How does authenticat
 
 </details>
 
+### 🎨 ColQwen: Multimodal PDF Retrieval with Vision-Language Models
+
+Search through PDFs using both text and visual understanding with ColQwen2/ColPali models. Perfect for research papers, technical documents, and any PDFs with complex layouts, figures, or diagrams.
+
+> **🍎 Mac Users**: ColQwen is optimized for Apple Silicon with MPS acceleration for faster inference!
+
+```bash
+# Build index from PDFs
+python -m apps.colqwen_rag build --pdfs ./my_papers/ --index research_papers
+
+# Search with text queries
+python -m apps.colqwen_rag search research_papers "How does attention mechanism work?"
+
+# Interactive Q&A
+python -m apps.colqwen_rag ask research_papers --interactive
+```
+
+<details>
+<summary><strong>📋 Click to expand: ColQwen Setup & Usage</strong></summary>
+
+#### Prerequisites
+```bash
+# Install dependencies
+uv pip install colpali_engine pdf2image pillow matplotlib qwen_vl_utils einops seaborn
+brew install poppler  # macOS only, for PDF processing
+```
+
+#### Build Index
+```bash
+python -m apps.colqwen_rag build \
+  --pdfs ./pdf_directory/ \
+  --index my_index \
+  --model colqwen2  # or colpali
+```
+
+#### Search
+```bash
+python -m apps.colqwen_rag search my_index "your question here" --top-k 5
+```
+
+#### Models
+- **ColQwen2** (`colqwen2`): Latest vision-language model with improved performance
+- **ColPali** (`colpali`): Proven multimodal retriever
+
+For detailed usage, see the [ColQwen Guide](COLQWEN_GUIDE.md).
+
+</details>
+
 ### 📧 Your Personal Email Secretary: RAG on Apple Mail!
 
 > **Note:** The examples below currently support macOS only. Windows support coming soon.
