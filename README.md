@@ -36,7 +36,7 @@ LEANN is an innovative vector database that democratizes personal AI. Transform 
 
 LEANN achieves this through *graph-based selective recomputation* with *high-degree preserving pruning*, computing embeddings on-demand instead of storing them all. [Illustration Fig →](#️-architecture--how-it-works) | [Paper →](https://arxiv.org/abs/2506.08276)
 
-**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](#-wechat-detective-unlock-your-golden-memories), [iMessage](#-imessage-history-your-personal-conversation-archive)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](#-chatgpt-chat-history-your-personal-ai-conversation-archive), [Claude](#-claude-chat-history-your-personal-ai-conversation-archive)), **[live data](#mcp-integration-rag-on-live-data-from-any-platform)** ([Slack](#mcp-integration-rag-on-live-data-from-any-platform), [Twitter](#mcp-integration-rag-on-live-data-from-any-platform)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
+**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](#-wechat-detective-unlock-your-golden-memories), [iMessage](#-imessage-history-your-personal-conversation-archive)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](#-chatgpt-chat-history-your-personal-ai-conversation-archive), [Claude](#-claude-chat-history-your-personal-ai-conversation-archive)), **[live data](#mcp-integration-rag-on-live-data-from-any-platform)** ([Slack](#slack-messages-search-your-team-conversations), [Twitter](#-twitter-bookmarks-your-personal-tweet-library)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
 
 
 \* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
@@ -389,6 +389,54 @@ python -m apps.document_rag --enable-code-chunking --data-dir "./my_project"
 # Or use the specialized code RAG for better code understanding
 python -m apps.code_rag --repo-dir "./my_codebase" --query "How does authentication work?"
 ```
+
+</details>
+
+### 🎨 ColQwen: Multimodal PDF Retrieval with Vision-Language Models
+
+Search through PDFs using both text and visual understanding with ColQwen2/ColPali models. Perfect for research papers, technical documents, and any PDFs with complex layouts, figures, or diagrams.
+
+> **🍎 Mac Users**: ColQwen is optimized for Apple Silicon with MPS acceleration for faster inference!
+
+```bash
+# Build index from PDFs
+python -m apps.colqwen_rag build --pdfs ./my_papers/ --index research_papers
+
+# Search with text queries
+python -m apps.colqwen_rag search research_papers "How does attention mechanism work?"
+
+# Interactive Q&A
+python -m apps.colqwen_rag ask research_papers --interactive
+```
+
+<details>
+<summary><strong>📋 Click to expand: ColQwen Setup & Usage</strong></summary>
+
+#### Prerequisites
+```bash
+# Install dependencies
+uv pip install colpali_engine pdf2image pillow matplotlib qwen_vl_utils einops seaborn
+brew install poppler  # macOS only, for PDF processing
+```
+
+#### Build Index
+```bash
+python -m apps.colqwen_rag build \
+  --pdfs ./pdf_directory/ \
+  --index my_index \
+  --model colqwen2  # or colpali
+```
+
+#### Search
+```bash
+python -m apps.colqwen_rag search my_index "your question here" --top-k 5
+```
+
+#### Models
+- **ColQwen2** (`colqwen2`): Latest vision-language model with improved performance
+- **ColPali** (`colpali`): Proven multimodal retriever
+
+For detailed usage, see the [ColQwen Guide](docs/COLQWEN_GUIDE.md).
 
 </details>
 
