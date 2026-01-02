@@ -298,10 +298,19 @@ Below is a list of base URLs for common providers to get you started.
 | **SiliconFlow** | `https://api.siliconflow.cn/v1`                            |
 | **Zhipu (BigModel)** | `https://open.bigmodel.cn/api/paas/v4/`                |
 | **Mistral AI** | `https://api.mistral.ai/v1`                                |
-| **Anthropic** | `https://api.anthropic.com/v1`                                |
+| **Anthropic** | `https://api.anthropic.com/v1`                             |
+| **Jina AI** (Embeddings) | `https://api.jina.ai/v1`                         |
 
-
-
+> **💡 Tip: Separate Embedding Provider**
+>
+> To use a different provider for embeddings (e.g., Jina AI) while using another for LLM, use `--embedding-api-base` and `--embedding-api-key`:
+> ```bash
+> leann build my-index --docs ./docs \
+>   --embedding-mode openai \
+>   --embedding-model jina-embeddings-v3 \
+>   --embedding-api-base https://api.jina.ai/v1 \
+>   --embedding-api-key $JINA_API_KEY
+> ```
 
 If your provider isn't on this list, don't worry! Check their documentation for an OpenAI-compatible endpoint—chances are, it's OpenAI Compatible too!
 
