@@ -402,7 +402,12 @@ def compute_embeddings_sentence_transformers(
 
     # Auto-detect device
     if device == "auto":
-        if torch.cuda.is_available():
+        # Check environment variable first
+        env_device = os.getenv("LEANN_EMBEDDING_DEVICE")
+        if env_device:
+            device = env_device
+            logger.info(f"Using device from LEANN_EMBEDDING_DEVICE: {device}")
+        elif torch.cuda.is_available():
             device = "cuda"
         elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             device = "mps"

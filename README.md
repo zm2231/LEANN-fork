@@ -356,6 +356,10 @@ LEANN provides flexible parameters for embedding models, search strategies, and 
 All RAG examples share these common parameters. **Interactive mode** is available in all examples - simply run without `--query` to start a continuous Q&A session where you can ask multiple questions. Type 'quit' to exit.
 
 ```bash
+# Environment Variables (GPU Device Selection)
+LEANN_EMBEDDING_DEVICE       # GPU for embedding model (e.g., cuda:0, cuda:1, cpu)
+LEANN_LLM_DEVICE             # GPU for HFChat LLM (e.g., cuda:1, or "cuda" for multi-GPU auto)
+
 # Core Parameters (General preprocessing for all examples)
 --index-dir DIR              # Directory to store the index (default: current directory)
 --query "YOUR QUESTION"      # Single query mode. Omit for interactive chat (type 'quit' to exit), and now you can play with your index interactively
