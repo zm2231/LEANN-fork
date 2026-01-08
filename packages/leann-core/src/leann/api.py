@@ -979,7 +979,7 @@ class LeannSearcher:
         self.backend_impl: LeannBackendSearcherInterface = backend_factory.searcher(
             index_path, **final_kwargs
         )
-        self.bm25_scorer = None
+        self.bm25_scorer: Optional[BM25Scorer] = None
 
     def search(
         self,
@@ -1045,68 +1045,79 @@ class LeannSearcher:
             )
             logger.warning(f"  ✅ Auto-adjusted top_k to {top_k} to match available documents")
 
-        zmq_port = None
+        # Handle pure keyword search
+        if gemma == 0.0:
+            start_time = time.time()
+            bm25_results = self._bm25_search(query, top_k)
+            # Convert BM25 results to the expected format
+            results = {
+                "labels": [[r.id for r in bm25_results]],
+                "distances": [[r.score for r in bm25_results]],
+            }
+        else:
+            # Perform vector search
+            zmq_port = None
 
-        start_time = time.time()
-        if recompute_embeddings:
-            zmq_port = self.backend_impl._ensure_server_running(
-                self.meta_path_str,
-                port=expected_zmq_port,
-                **kwargs,
+            start_time = time.time()
+            if recompute_embeddings:
+                zmq_port = self.backend_impl._ensure_server_running(
+                    self.meta_path_str,
+                    port=expected_zmq_port,
+                    **kwargs,
+                )
+                del expected_zmq_port
+            zmq_time = time.time() - start_time
+            logger.info(f"  Launching server time: {zmq_time} seconds")
+
+            start_time = time.time()
+
+            # Extract query template from stored embedding_options with fallback chain:
+            # 1. Check provider_options override (highest priority)
+            # 2. Check query_prompt_template (new format)
+            # 3. Check prompt_template (old format for backward compat)
+            # 4. None (no template)
+            query_template = None
+            if provider_options and "prompt_template" in provider_options:
+                query_template = provider_options["prompt_template"]
+            elif "query_prompt_template" in self.embedding_options:
+                query_template = self.embedding_options["query_prompt_template"]
+            elif "prompt_template" in self.embedding_options:
+                query_template = self.embedding_options["prompt_template"]
+
+            query_embedding = self.backend_impl.compute_query_embedding(
+                query,
+                use_server_if_available=recompute_embeddings,
+                zmq_port=zmq_port,
+                query_template=query_template,
             )
-            del expected_zmq_port
-        zmq_time = time.time() - start_time
-        logger.info(f"  Launching server time: {zmq_time} seconds")
+            logger.info(f"  Generated embedding shape: {query_embedding.shape}")
+            embedding_time = time.time() - start_time
+            logger.info(f"  Embedding time: {embedding_time} seconds")
 
-        start_time = time.time()
+            start_time = time.time()
+            backend_search_kwargs: dict[str, Any] = {
+                "complexity": complexity,
+                "beam_width": beam_width,
+                "prune_ratio": prune_ratio,
+                "recompute_embeddings": recompute_embeddings,
+                "pruning_strategy": pruning_strategy,
+                "zmq_port": zmq_port,
+            }
+            # Only HNSW supports batching; forward conditionally
+            if self.backend_name == "hnsw":
+                backend_search_kwargs["batch_size"] = batch_size
 
-        # Extract query template from stored embedding_options with fallback chain:
-        # 1. Check provider_options override (highest priority)
-        # 2. Check query_prompt_template (new format)
-        # 3. Check prompt_template (old format for backward compat)
-        # 4. None (no template)
-        query_template = None
-        if provider_options and "prompt_template" in provider_options:
-            query_template = provider_options["prompt_template"]
-        elif "query_prompt_template" in self.embedding_options:
-            query_template = self.embedding_options["query_prompt_template"]
-        elif "prompt_template" in self.embedding_options:
-            query_template = self.embedding_options["prompt_template"]
+            # Merge any extra kwargs last
+            backend_search_kwargs.update(kwargs)
 
-        query_embedding = self.backend_impl.compute_query_embedding(
-            query,
-            use_server_if_available=recompute_embeddings,
-            zmq_port=zmq_port,
-            query_template=query_template,
-        )
-        logger.info(f"  Generated embedding shape: {query_embedding.shape}")
-        embedding_time = time.time() - start_time
-        logger.info(f"  Embedding time: {embedding_time} seconds")
-
-        start_time = time.time()
-        backend_search_kwargs: dict[str, Any] = {
-            "complexity": complexity,
-            "beam_width": beam_width,
-            "prune_ratio": prune_ratio,
-            "recompute_embeddings": recompute_embeddings,
-            "pruning_strategy": pruning_strategy,
-            "zmq_port": zmq_port,
-        }
-        # Only HNSW supports batching; forward conditionally
-        if self.backend_name == "hnsw":
-            backend_search_kwargs["batch_size"] = batch_size
-
-        # Merge any extra kwargs last
-        backend_search_kwargs.update(kwargs)
-
-        results = self.backend_impl.search(
-            query_embedding,
-            top_k,
-            **backend_search_kwargs,
-        )
+            results = self.backend_impl.search(
+                query_embedding,
+                top_k,
+                **backend_search_kwargs,
+            )
 
         # Handle hybrid search
-        if gemma < 1.0:
+        if 0.0 < gemma < 1.0:
             logger.info(f"  🌟 Hybrid search enabled with gemma={gemma}")
             BM25_WEIGHT = 1.0 - gemma
             bm25_results = self._bm25_search(query, top_k)
