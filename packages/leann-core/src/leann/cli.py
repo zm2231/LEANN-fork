@@ -1783,8 +1783,6 @@ Examples:
             await self.ask_questions(args)
         elif args.command == "serve":
             await self.serve_api(args)
-            with suppress_cpp_output(suppress):
-                await self.ask_questions(args)
         else:
             parser.print_help()
 
