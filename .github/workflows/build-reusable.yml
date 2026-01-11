@@ -445,6 +445,8 @@ jobs:
     steps:
       - name: Prepare system
         run: |
+          # Initialize pacman keyring to avoid "no secret key available" error
+          pacman-key --init
           pacman -Syu --noconfirm
           pacman -S --noconfirm python python-pip gcc git zlib openssl
 
