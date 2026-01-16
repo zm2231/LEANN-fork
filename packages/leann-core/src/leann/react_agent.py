@@ -62,7 +62,9 @@ class ReActAgent:
             return "No results found."
         formatted = []
         for i, result in enumerate(results, 1):
-            formatted.append(f"[Result {i}] (Score: {result.score:.3f})\n{result.text[:500]}...")
+            formatted.append(
+                f"[Result {i}] (Score: {result.score:.3f})\n{result.text[:500]}..."
+            )
             if result.metadata.get("source"):
                 formatted[-1] += f"\nSource: {result.metadata['source']}"
         return "\n\n".join(formatted)
@@ -218,7 +220,7 @@ Action: search("query") OR Final Answer: [your answer]
                 return final_answer
 
             # Perform search action
-            logger.info(f'🔍 Action: search("{action}")')
+            logger.info(f"🔍 Action: search(\"{action}\")")
             results = self.search(action, top_k=top_k)
 
             # Format observation
@@ -286,3 +288,4 @@ def create_react_agent(
     """
     searcher = LeannSearcher(index_path, **searcher_kwargs)
     return ReActAgent(searcher=searcher, llm_config=llm_config, max_iterations=max_iterations)
+
