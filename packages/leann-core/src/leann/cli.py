@@ -451,6 +451,17 @@ Examples:
             "--force", "-f", action="store_true", help="Force removal without confirmation"
         )
 
+        # Serve command (HTTP API server)
+        serve_parser = subparsers.add_parser(
+            "serve", help="Start HTTP API server for LEANN vector DB"
+        )
+        serve_parser.add_argument(
+            "--host", type=str, default=None, help="Host to bind to (default: 0.0.0.0)"
+        )
+        serve_parser.add_argument(
+            "--port", type=int, default=None, help="Port to bind to (default: 8000)"
+        )
+
         return parser
 
     def register_project_dir(self):
