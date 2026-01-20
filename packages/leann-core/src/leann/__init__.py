@@ -2,6 +2,8 @@
 import os
 import platform
 
+# ruff: noqa: E402  (env vars must be set before importing the rest of the package)
+
 # Fix OpenMP/FAISS threading defaults for common platforms
 system = platform.system()
 
