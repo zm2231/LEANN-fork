@@ -124,6 +124,7 @@ Examples:
   leann build my-ppts --docs ./ --file-types .pptx,.pdf                  # Index only PowerPoint and PDF files
   leann search my-docs "query"                                           # Search in my-docs index
   leann ask my-docs "question"                                           # Ask my-docs index
+  leann react my-docs "complex question"                                 # Use ReAct agent for multiturn retrieval
   leann list                                                             # List all stored indexes
   leann remove my-docs                                                   # Remove an index (local first, then global)
             """,
@@ -390,6 +391,50 @@ Examples:
             help="Base URL for OpenAI-compatible APIs (e.g., http://localhost:10000/v1)",
         )
         ask_parser.add_argument(
+            "--api-key",
+            type=str,
+            default=None,
+            help="API key for cloud LLM providers (OpenAI, Anthropic)",
+        )
+
+        # React command (multiturn retrieval agent)
+        react_parser = subparsers.add_parser(
+            "react", help="Use ReAct agent for multiturn retrieval and reasoning"
+        )
+        react_parser.add_argument("index_name", help="Index name")
+        react_parser.add_argument("query", help="Question to research")
+        react_parser.add_argument(
+            "--llm",
+            type=str,
+            default="ollama",
+            choices=["simulated", "ollama", "hf", "openai", "anthropic"],
+            help="LLM provider (default: ollama)",
+        )
+        react_parser.add_argument(
+            "--model", type=str, default="qwen3:8b", help="Model name (default: qwen3:8b)"
+        )
+        react_parser.add_argument(
+            "--host",
+            type=str,
+            default=None,
+            help="Override Ollama-compatible host (defaults to LEANN_OLLAMA_HOST/OLLAMA_HOST)",
+        )
+        react_parser.add_argument(
+            "--top-k", type=int, default=5, help="Number of results per search (default: 5)"
+        )
+        react_parser.add_argument(
+            "--max-iterations",
+            type=int,
+            default=5,
+            help="Maximum number of search iterations (default: 5)",
+        )
+        react_parser.add_argument(
+            "--api-base",
+            type=str,
+            default=None,
+            help="Base URL for OpenAI-compatible APIs (e.g., http://localhost:10000/v1)",
+        )
+        react_parser.add_argument(
             "--api-key",
             type=str,
             default=None,
@@ -1727,6 +1772,77 @@ Examples:
 
             _ask_once(query)
 
+    async def react_agent(self, args):
+        """Run ReAct agent for multiturn retrieval."""
+        index_name = args.index_name
+        query = args.query
+
+        # Find the index (similar to search_documents)
+        index_path = self.get_index_path(index_name)
+        if self.index_exists(index_name):
+            pass
+        else:
+            all_matches = self._find_all_matching_indexes(index_name)
+            if not all_matches:
+                print(
+                    f"Index '{index_name}' not found. Use 'leann build {index_name} --docs <dir> [<dir2> ...]' to create it."
+                )
+                return
+            elif len(all_matches) == 1:
+                match = all_matches[0]
+                if match["kind"] == "cli":
+                    index_path = str(match["index_dir"] / "documents.leann")
+                else:
+                    meta_file = match["meta_file"]
+                    file_base = match["file_base"]
+                    index_path = str(meta_file.parent / f"{file_base}.leann")
+            else:
+                # Multiple matches - use first one for now
+                match = all_matches[0]
+                if match["kind"] == "cli":
+                    index_path = str(match["index_dir"] / "documents.leann")
+                else:
+                    meta_file = match["meta_file"]
+                    file_base = match["file_base"]
+                    index_path = str(meta_file.parent / f"{file_base}.leann")
+                print(f"Found {len(all_matches)} indexes named '{index_name}', using first match")
+
+        print(f"🤖 Starting ReAct agent with index '{index_name}'...")
+        print(f"Using {args.model} ({args.llm})")
+
+        llm_config = {"type": args.llm, "model": args.model}
+        if args.llm == "ollama":
+            llm_config["host"] = resolve_ollama_host(args.host)
+        elif args.llm == "openai":
+            llm_config["base_url"] = resolve_openai_base_url(args.api_base)
+            resolved_api_key = resolve_openai_api_key(args.api_key)
+            if resolved_api_key:
+                llm_config["api_key"] = resolved_api_key
+        elif args.llm == "anthropic":
+            if args.api_base:
+                llm_config["base_url"] = resolve_anthropic_base_url(args.api_base)
+            if args.api_key:
+                llm_config["api_key"] = args.api_key
+
+        from .react_agent import create_react_agent
+
+        agent = create_react_agent(
+            index_path=index_path,
+            llm_config=llm_config,
+            max_iterations=args.max_iterations,
+        )
+
+        print(f"\n🔍 Question: {query}\n")
+        answer = agent.run(query, top_k=args.top_k)
+        print(f"\n✅ Final Answer:\n{answer}\n")
+
+        if agent.search_history:
+            print(f"\n📊 Search History ({len(agent.search_history)} iterations):")
+            for entry in agent.search_history:
+                print(
+                    f"  {entry['iteration']}. {entry['action']} ({entry['results_count']} results)"
+                )
+
     async def serve_api(self, args):
         """Start the HTTP API server."""
         import os
@@ -1781,7 +1897,11 @@ Examples:
             with suppress_cpp_output(suppress):
                 await self.search_documents(args)
         elif args.command == "ask":
-            await self.ask_questions(args)
+            with suppress_cpp_output(suppress):
+                await self.ask_questions(args)
+        elif args.command == "react":
+            with suppress_cpp_output(suppress):
+                await self.react_agent(args)
         elif args.command == "serve":
             await self.serve_api(args)
         else:
