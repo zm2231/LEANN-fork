@@ -856,6 +856,7 @@ Examples:
 
         total_indexes = 0
         current_indexes_count = 0
+        size_cache = {}
 
         # Show current storage header
         leann_home_env = os.environ.get("LEANN_HOME")
@@ -867,8 +868,9 @@ Examples:
             print(f"   {current_path}")
         print("   " + "─" * 45)
 
+        # Optimization: Only include central indexes in the current project listing
         current_indexes = self._discover_indexes_in_project(
-            current_path, exclude_dirs=other_projects
+            current_path, exclude_dirs=other_projects, include_central=True, size_cache=size_cache
         )
         if current_indexes:
             for idx in current_indexes:
@@ -887,7 +889,11 @@ Examples:
             print("   " + "─" * 45)
 
             for project_path in other_projects:
-                project_indexes = self._discover_indexes_in_project(project_path)
+                # Optimization: Do NOT include central indexes in other project listings
+                # This prevents massive redundancy and saves time
+                project_indexes = self._discover_indexes_in_project(
+                    project_path, include_central=False, size_cache=size_cache
+                )
                 if not project_indexes:
                     continue
 
@@ -907,16 +913,7 @@ Examples:
             print("💡 Get started:")
             print("   leann build my-docs --docs ./documents")
         else:
-            # Count only projects that have at least one discoverable index
-            projects_count = 0
-            for p in valid_projects:
-                if p == current_path:
-                    discovered = self._discover_indexes_in_project(p, exclude_dirs=other_projects)
-                else:
-                    discovered = self._discover_indexes_in_project(p)
-                if len(discovered) > 0:
-                    projects_count += 1
-            print(f"📊 Total: {total_indexes} indexes across {projects_count} projects")
+            print(f"📊 Total: {total_indexes} indexes")
 
             if current_indexes_count > 0:
                 print("\n💫 Quick start:")
@@ -930,16 +927,24 @@ Examples:
                 print("   leann build my-docs --docs ./documents")
 
     def _discover_indexes_in_project(
-        self, project_path: Path, exclude_dirs: Optional[list[Path]] = None
+        self,
+        project_path: Path,
+        exclude_dirs: Optional[list[Path]] = None,
+        include_central: bool = True,
+        size_cache: Optional[dict[str, float]] = None,
     ):
         """Discover all indexes in a project directory (both CLI and apps formats)
 
+        include_central: If True, includes the central indexes directory (~/.leann/indexes)
         exclude_dirs: when provided, skip any APP-format index files that are
         located under these directories. This prevents duplicates when the
         current project is a parent directory of other registered projects.
+        size_cache: Cache for index sizes to avoid redundant stat calls
         """
         indexes = []
         exclude_dirs = exclude_dirs or []
+        size_cache = size_cache if size_cache is not None else {}
+
         # normalize to resolved paths once for comparison
         try:
             exclude_dirs_resolved = [p.resolve() for p in exclude_dirs]
@@ -947,17 +952,19 @@ Examples:
             exclude_dirs_resolved = exclude_dirs
 
         # 1. CLI format: .leann/indexes/index_name/ (Check both central and local)
-        # First, check the central indexes dir we set in __init__
-        dirs_to_check = [self.indexes_dir]
+        dirs_to_check = []
+        if include_central:
+            dirs_to_check.append(self.indexes_dir)
 
-        # If project_path is different from our central leann_home, also check project-local .leann
+        # If project_path has a local .leann/indexes, also check it
         try:
             local_indexes_dir = project_path / ".leann" / "indexes"
-            if (
-                local_indexes_dir.resolve() != self.indexes_dir.resolve()
-                and local_indexes_dir.exists()
-            ):
-                dirs_to_check.append(local_indexes_dir)
+            if local_indexes_dir.exists():
+                # Avoid duplicate scan if local matches central
+                local_resolved = local_indexes_dir.resolve()
+                central_resolved = self.indexes_dir.resolve()
+                if local_resolved != central_resolved:
+                    dirs_to_check.append(local_indexes_dir)
         except (OSError, PermissionError):
             pass
 
@@ -966,17 +973,27 @@ Examples:
                 if cli_indexes_dir.exists():
                     for index_dir in cli_indexes_dir.iterdir():
                         if index_dir.is_dir():
+                            # Cache key for this index
+                            cache_key = str(index_dir.resolve())
+
                             meta_file = index_dir / "documents.leann.meta.json"
                             status = "✅" if meta_file.exists() else "❌"
 
                             size_mb = 0
                             if meta_file.exists():
-                                try:
-                                    size_mb = sum(
-                                        f.stat().st_size for f in index_dir.iterdir() if f.is_file()
-                                    ) / (1024 * 1024)
-                                except (OSError, PermissionError):
-                                    pass
+                                if cache_key in size_cache:
+                                    size_mb = size_cache[cache_key]
+                                else:
+                                    try:
+                                        # Fast size calculation (top-level files only)
+                                        size_mb = sum(
+                                            f.stat().st_size
+                                            for f in index_dir.iterdir()
+                                            if f.is_file()
+                                        ) / (1024 * 1024)
+                                        size_cache[cache_key] = size_mb
+                                    except (OSError, PermissionError):
+                                        pass
 
                             # Avoid duplicates if checking multiple directories
                             if any(idx["name"] == index_dir.name for idx in indexes):
@@ -994,112 +1011,86 @@ Examples:
             except (OSError, PermissionError, FileNotFoundError):
                 continue
 
-        # 2. Apps format: *.leann.meta.json files anywhere in the project
-        exclusion_indexes_dir = self.indexes_dir
+        # 2. Apps format: *.leann.meta.json files in the project root ONLY
+        # We avoid recursive scanning to ensure high performance
+        meta_files = []
         try:
-            # Use a more robust scanning to avoid FileNotFoundError on transient files
-            for meta_file in project_path.rglob("*.leann.meta.json"):
-                try:
-                    if meta_file.is_file():
-                        # Skip CLI-built indexes (which store meta under .leann/indexes/<name>/)
-                        try:
-                            if (
-                                exclusion_indexes_dir.exists()
-                                and exclusion_indexes_dir in meta_file.parents
-                            ):
-                                continue
-                        except Exception:
-                            pass
-
-                        # Skip meta files that live under excluded directories
-                        try:
-                            meta_parent_resolved = meta_file.parent.resolve()
-                            if any(
-                                meta_parent_resolved.is_relative_to(ex_dir)
-                                for ex_dir in exclude_dirs_resolved
-                            ):
-                                continue
-                        except Exception:
-                            pass
-
-                        display_name = meta_file.parent.name
-                        file_base = meta_file.name.replace(".leann.meta.json", "")
-                        status = "✅"
-
-                        size_mb = 0
-                        try:
-                            index_dir = meta_file.parent
-                            for related_file in index_dir.glob(f"{file_base}.leann*"):
-                                size_mb += related_file.stat().st_size / (1024 * 1024)
-                        except (OSError, PermissionError):
-                            pass
-
-                        indexes.append(
-                            {
-                                "name": display_name,
-                                "type": "app",
-                                "status": status,
-                                "size_mb": size_mb,
-                                "path": meta_file,
-                            }
-                        )
-                except (OSError, PermissionError, FileNotFoundError):
-                    continue
+            # Level 0 ONLY (Project Root)
+            meta_files.extend(project_path.glob("*.leann.meta.json"))
         except (OSError, PermissionError):
             pass
 
-        return indexes
-
-        # 2. Apps format: *.leann.meta.json files anywhere in the project
         exclusion_indexes_dir = self.indexes_dir
-        for meta_file in project_path.rglob("*.leann.meta.json"):
-            if meta_file.is_file():
-                # Skip CLI-built indexes (which store meta under .leann/indexes/<name>/)
-                try:
-                    if (
-                        exclusion_indexes_dir.exists()
-                        and exclusion_indexes_dir in meta_file.parents
-                    ):
+        for meta_file in meta_files:
+            try:
+                if meta_file.is_file():
+                    # Skip CLI-built indexes
+                    try:
+                        if (
+                            exclusion_indexes_dir.exists()
+                            and exclusion_indexes_dir in meta_file.parents
+                        ):
+                            continue
+                    except Exception:
+                        pass
+
+                    # Skip meta files that live under excluded directories
+                    try:
+                        meta_parent_resolved = meta_file.parent.resolve()
+                        if any(
+                            meta_parent_resolved.is_relative_to(ex_dir)
+                            for ex_dir in exclude_dirs_resolved
+                        ):
+                            continue
+                    except Exception:
+                        pass
+
+                    display_name = meta_file.parent.name
+                    file_base = meta_file.name.replace(".leann.meta.json", "")
+                    status = "✅"
+
+                    # Cache key for app index
+                    cache_key = f"app:{meta_file.resolve()}"
+
+                    size_mb = 0
+                    if cache_key in size_cache:
+                        size_mb = size_cache[cache_key]
+                    else:
+                        try:
+                            index_dir = meta_file.parent
+                            # Optimization: Avoid glob in large directories
+                            related_extensions = [
+                                "",
+                                ".passages.jsonl",
+                                ".passages.idx",
+                                ".mapping.json",
+                            ]
+                            for rel_ext in related_extensions:
+                                rel_path = index_dir / f"{file_base}.leann{rel_ext}"
+                                try:
+                                    if rel_path.is_file():
+                                        size_mb += rel_path.stat().st_size / (1024 * 1024)
+                                except (OSError, PermissionError):
+                                    continue
+                            size_cache[cache_key] = size_mb
+                        except (OSError, PermissionError):
+                            pass
+
+                    # Avoid duplicates
+                    if any(idx["name"] == display_name and idx["type"] == "app" for idx in indexes):
                         continue
-                except Exception:
-                    pass
-                # Skip meta files that live under excluded directories
-                try:
-                    meta_parent_resolved = meta_file.parent.resolve()
-                    if any(
-                        meta_parent_resolved.is_relative_to(ex_dir)
-                        for ex_dir in exclude_dirs_resolved
-                    ):
-                        continue
-                except Exception:
-                    # best effort; if resolve or comparison fails, do not exclude
-                    pass
-                # Use the parent directory name as the app index display name
-                display_name = meta_file.parent.name
-                # Extract file base used to store files
-                file_base = meta_file.name.replace(".leann.meta.json", "")
 
-                # Apps indexes are considered complete if the .leann.meta.json file exists
-                status = "✅"
-
-                # Calculate total size of all related files (use file base)
-                size_mb = 0
-                try:
-                    index_dir = meta_file.parent
-                    for related_file in index_dir.glob(f"{file_base}.leann*"):
-                        size_mb += related_file.stat().st_size / (1024 * 1024)
-                except (OSError, PermissionError):
-                    pass
-
-                indexes.append(
-                    {
-                        "name": display_name,
-                        "type": "app",
-                        "status": status,
-                        "size_mb": size_mb,
-                        "path": meta_file,
-                    }
-                )
+                    indexes.append(
+                        {
+                            "name": display_name,
+                            "type": "app",
+                            "status": status,
+                            "size_mb": size_mb,
+                            "path": meta_file,
+                        }
+                    )
+            except (OSError, PermissionError, FileNotFoundError):
+                continue
 
         return indexes
 
