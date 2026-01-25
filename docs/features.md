@@ -8,6 +8,20 @@
 - **🎯 Graph Pruning** - Advanced techniques to minimize the storage overhead of vector search to a limited footprint
 - **🏗️ Pluggable Backends** - HNSW/FAISS (default), with optional DiskANN for large-scale deployments
 
+## 📱 Universal Ingestion & Formats
+
+- **📑 Multi-Format Support**: Native handling of `.pdf`, `.txt`, `.md`, `.docx`, `.pptx`, `.xlsx`, and `.mm` (Mindmaps).
+- **🚀 Advanced PDF Pipeline**: Intelligent fallback chain featuring [PyMuPDF](https://github.com/pymupdf/PyMuPDF), [pypdf](https://github.com/py-pdf/pypdf), [pdfplumber](https://github.com/jsvine/pdfplumber), and [**Docling OCR**](https://github.com/DS4SD/docling) (IBM Research) for high-fidelity document parsing.
+- **💼 Office Document Extractors**: Structural awareness for Word ([python-docx](https://github.com/python-openxml/python-docx)), Excel ([openpyxl](https://github.com/ericgazoni/openpyxl)), and PowerPoint ([python-pptx](https://github.com/python-openxml/python-pptx)) preserving tables, slides, and sheets.
+- **🧠 Mindmap Parsing**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/) and [Freeplane](https://www.freeplane.org/) (`.mm`) preserving semantic relationships in zettelkasten-like structures.
+- **📱 Integrated Source Connectors**: Dedicated CLI commands for:
+  - **Apple Mail**: Direct indexing of the macOS Mail SQLite database (`Envelope Index`).
+  - **Apple Calendar**: Indexing of local events and descriptions from the macOS Calendar cache.
+  - **iMessage**: Grouping and indexing of local chat history from the `chat.db` database.
+  - **WeChat**: Parsing and indexing of [WeChat](https://www.wechat.com/) chat history from JSON exports.
+  - **MCP Integration**: Real-time retrieval from [Slack](https://slack.com/), [Twitter/X](https://x.com/), and more through the [Model Context Protocol](https://modelcontextprotocol.io/).
+  - **AI Conversation Archives**: Direct indexing of [ChatGPT](https://chat.openai.com/) and [Claude](https://claude.ai/) conversation data exports.
+
 ## 🛠️ Technical Highlights
 - **🔄 Recompute Mode** - Highest accuracy scenarios while eliminating vector storage overhead
 - **⚡ Zero-copy Operations** - Minimize IPC overhead by transferring distances instead of embeddings

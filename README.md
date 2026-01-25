@@ -36,12 +36,9 @@ LEANN is an innovative vector database that democratizes personal AI. Transform 
 
 LEANN achieves this through *graph-based selective recomputation* with *high-degree preserving pruning*, computing embeddings on-demand instead of storing them all. [Illustration Fig →](#️-architecture--how-it-works) | [Paper →](https://arxiv.org/abs/2506.08276)
 
-**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](#-wechat-detective-unlock-your-golden-memories), [iMessage](#-imessage-history-your-personal-conversation-archive)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](#-chatgpt-chat-history-your-personal-ai-conversation-archive), [Claude](#-claude-chat-history-your-personal-ai-conversation-archive)), **[live data](#mcp-integration-rag-on-live-data-from-any-platform)** ([Slack](#slack-messages-search-your-team-conversations), [Twitter](#-twitter-bookmarks-your-personal-tweet-library)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
+**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](https://www.wechat.com/), [iMessage](https://support.apple.com/messages)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](https://chat.openai.com/), [Claude](https://claude.ai/)), **[live data](#mcp-integration-rag-on-live-data-from-any-platform)** ([Slack](https://slack.com/), [Twitter/X](https://x.com/)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
 
-
-\* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
-
-
+* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
 
 ## Why LEANN?
 
@@ -364,9 +361,20 @@ LEANN_LLM_DEVICE             # GPU for HFChat LLM (e.g., cuda:1, or "cuda" for m
 
 </details>
 
-### 📄 Personal Data Manager: Process Any Documents (`.pdf`, `.txt`, `.md`)!
+### 📄 Personal Data Manager: Process Any Documents (`.pdf`, `.txt`, `.md`, `.docx`, `.pptx`, `.xlsx`, `.mm`)!
 
-Ask questions directly about your personal PDFs, documents, and any directory containing your files!
+Ask questions directly about your personal PDFs, Word docs, Excel sheets, PowerPoint presentations, and Mindmaps! LEANN now features dedicated structural extractors for Office and Mindmap formats to ensure maximum context preservation.
+
+#### 🚀 Advanced PDF & Document Processing
+LEANN implements a robust, multi-layer fallback pipeline for processing documents:
+1. [**PyMuPDF**](https://github.com/pymupdf/PyMuPDF): Primary extractor for high-quality layout preservation.
+2. [**pypdf**](https://github.com/py-pdf/pypdf): Fast and reliable secondary fallback.
+3. [**pdfplumber**](https://github.com/jsvine/pdfplumber): Specialized extractor for complex tables.
+4. [**Docling OCR**](https://github.com/DS4SD/docling): The ultimate fallback from IBM Research for scanned PDFs and complex multimodal layouts.
+
+Dedicated extractors are also used for:
+- **Office**: Structural extraction for `.docx` ([python-docx](https://github.com/python-openxml/python-docx)), `.pptx` ([python-pptx](https://github.com/python-openxml/python-pptx)), and `.xlsx` ([openpyxl](https://github.com/ericgazoni/openpyxl)).
+- **Mindmaps**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/)/[Freeplane](https://www.freeplane.org/) (`.mm`).
 
 <p align="center">
   <img src="videos/paper_clear.gif" alt="LEANN Document Search Demo" width="600">
@@ -1125,6 +1133,33 @@ Options:
   --model MODEL                         Model name (default: qwen3:8b)
   --interactive                         Interactive chat mode
   --top-k N                             Retrieval count (default: 20)
+```
+
+**Unified Personal Data Indexing Commands:**
+LEANN now provides dedicated commands to index various personal data sources with zero configuration:
+
+```bash
+# Index Apple Mail (Requires Full Disk Access)
+leann index-email --max-items 5000
+
+# Index Apple Calendar
+leann index-calendar
+
+# Index iMessage History
+leann index-imessage --max-items 2000
+
+# Index Browser History (Chrome or Brave)
+leann index-browser brave --profile Default
+
+# Index WeChat History (Requires JSON export)
+leann index-wechat --export-dir ./wechat_data
+
+# Index Slack via MCP
+leann index-slack --mcp-server "slack-mcp-server" --workspace "my-team"
+
+# Index AI Conversations
+leann index-chatgpt --export-path ./chatgpt_export.zip
+leann index-claude --export-path ./claude_export.json
 ```
 
 **List Command:**
