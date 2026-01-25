@@ -370,7 +370,7 @@ LEANN implements a robust, multi-layer fallback pipeline for processing document
 1. [**PyMuPDF**](https://github.com/pymupdf/PyMuPDF): Primary extractor for high-quality layout preservation.
 2. [**pypdf**](https://github.com/py-pdf/pypdf): Fast and reliable secondary fallback.
 3. [**pdfplumber**](https://github.com/jsvine/pdfplumber): Specialized extractor for complex tables.
-4. [**Docling OCR**](https://github.com/DS4SD/docling): The ultimate fallback from IBM Research for scanned PDFs and complex multimodal layouts.
+4. [**Docling OCR**](https://github.com/docling-project/docling): The ultimate fallback from IBM Research for scanned PDFs and complex multimodal layouts.
 
 Dedicated extractors are also used for:
 - **Office**: Structural extraction for `.docx` ([python-docx](https://github.com/python-openxml/python-docx)), `.pptx` ([python-pptx](https://github.com/python-openxml/python-pptx)), and `.xlsx` ([openpyxl](https://github.com/ericgazoni/openpyxl)).
