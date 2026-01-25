@@ -193,7 +193,7 @@ response = chat.ask("How much storage does LEANN save?", top_k=1)
 
 ## RAG on Everything!
 
-LEANN supports RAG on various data sources including documents (`.pdf`, `.txt`, `.md`), Apple Mail, Google Search History, WeChat, ChatGPT conversations, Claude conversations, iMessage conversations, and **live data from any platform through MCP (Model Context Protocol) servers** - including Slack, Twitter, and more.
+LEANN supports RAG on various data sources including documents (`.pdf`, `.txt`, `.md`, `.docx`, `.pptx`, `.xlsx`, `.mm`), Apple Mail, Apple Calendar, Google Search History, WeChat, ChatGPT conversations, Claude conversations, iMessage conversations, and **live data from any platform through MCP (Model Context Protocol) servers** - including Slack, Twitter, and more.
 
 
 
@@ -1077,8 +1077,10 @@ leann remove my-docs
 ```
 
 **Key CLI features:**
-- Auto-detects document formats (PDF, TXT, MD, DOCX, PPTX + code files)
+- Auto-detects document formats (PDF, TXT, MD, DOCX, PPTX, XLSX, MM + code files)
+- **🚀 Advanced PDF Processing**: Multi-layer fallback chain (PyMuPDF → pypdf → pdfplumber → Docling OCR) for maximum reliability
 - **🧠 AST-aware chunking** for Python, Java, C#, TypeScript files
+- **📱 Integrated Source Indexing**: Dedicated commands for Mail, Calendar, iMessage, and more
 - Smart text chunking with overlap for all other content
 - Multiple LLM providers (Ollama, OpenAI, HuggingFace)
 - Organized index storage in `.leann/indexes/` (project-local)
