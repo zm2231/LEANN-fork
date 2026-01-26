@@ -14,13 +14,13 @@
 - **🚀 Advanced PDF Pipeline**: Intelligent fallback chain featuring [PyMuPDF](https://github.com/pymupdf/PyMuPDF), [pypdf](https://github.com/py-pdf/pypdf), [pdfplumber](https://github.com/jsvine/pdfplumber), and [**Docling OCR**](https://github.com/docling-project/docling) (IBM Research) for high-fidelity document parsing.
 - **💼 Office Document Extractors**: Structural awareness for Word ([python-docx](https://github.com/python-openxml/python-docx)), Excel ([openpyxl](https://github.com/ericgazoni/openpyxl)), and PowerPoint ([python-pptx](https://github.com/python-openxml/python-pptx)) preserving tables, slides, and sheets.
 - **🧠 Mindmap Parsing**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/) and [Freeplane](https://www.freeplane.org/) (`.mm`) preserving semantic relationships in zettelkasten-like structures.
-- **📱 Integrated Source Connectors**: Dedicated CLI commands for:
-  - **Apple Mail**: Direct indexing of the macOS Mail SQLite database (`Envelope Index`).
-  - **Apple Calendar**: Indexing of local events and descriptions from the macOS Calendar cache.
-  - **iMessage**: Grouping and indexing of local chat history from the `chat.db` database.
-  - **WeChat**: Parsing and indexing of [WeChat](https://www.wechat.com/) chat history from JSON exports.
-  - **MCP Integration**: Real-time retrieval from [Slack](https://slack.com/), [Twitter/X](https://x.com/), and more through the [Model Context Protocol](https://modelcontextprotocol.io/).
-  - **AI Conversation Archives**: Direct indexing of [ChatGPT](https://chat.openai.com/) and [Claude](https://claude.ai/) conversation data exports.
+- **📱 Integrated Source Connectors**: Dedicated CLI commands for Apple Mail, Calendar, iMessage, WeChat, and more.
+
+## ⚡ Performance & Scalability
+
+- **🚀 Instant CLI Discovery**: Optimized `leann list` and `leann remove` commands use intelligent scanning and size caching to respond in milliseconds, regardless of the number of registered projects.
+- **📈 Huge Vault Support**: Native **DiskANN** backend integration allows indexing terabytes of data (millions of chunks) without exceeding laptop RAM limits.
+- **🧠 Advanced Code Analysis**: AST-aware chunking supports complex logic retrieval. For large functions (e.g., algorithmic trading strategies), using `--ast-chunk-size 1000` ensures that entire logical blocks stay in the same context for the LLM.
 
 ## 🛠️ Technical Highlights
 - **🔄 Recompute Mode** - Highest accuracy scenarios while eliminating vector storage overhead

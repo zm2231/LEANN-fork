@@ -1086,8 +1086,9 @@ leann remove my-docs
 
 **Key CLI features:**
 - Auto-detects document formats (PDF, TXT, MD, DOCX, PPTX, XLSX, MM + code files)
-- **🚀 Advanced PDF Processing**: Multi-layer fallback chain (PyMuPDF → pypdf → pdfplumber → Docling OCR) for maximum reliability
-- **🧠 AST-aware chunking** for Python, Java, C#, TypeScript files
+- **🚀 Advanced PDF Processing**: Multi-layer fallback chain ([PyMuPDF](https://github.com/pymupdf/PyMuPDF) → [pypdf](https://github.com/py-pdf/pypdf) → [pdfplumber](https://github.com/jsvine/pdfplumber) → [Docling OCR](https://github.com/docling-project/docling)) for maximum reliability
+- **⚡ High Performance**: Optimized index discovery and caching for instant CLI response even with TB-scale vaults
+- **🧠 AST-aware chunking** for Python, Java, C#, TypeScript files. Use larger chunks (`--ast-chunk-size 1000`) for complex logic analysis!
 - **📱 Integrated Source Indexing**: Dedicated commands for Mail, Calendar, iMessage, and more
 - Smart text chunking with overlap for all other content
 - Multiple LLM providers (Ollama, OpenAI, HuggingFace)

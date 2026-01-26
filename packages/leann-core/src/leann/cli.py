@@ -960,11 +960,19 @@ Examples:
         try:
             local_indexes_dir = project_path / ".leann" / "indexes"
             if local_indexes_dir.exists():
-                # Avoid duplicate scan if local matches central
+                # Avoid duplicate scan if local matches central or is inside it
                 local_resolved = local_indexes_dir.resolve()
                 central_resolved = self.indexes_dir.resolve()
-                if local_resolved != central_resolved:
-                    dirs_to_check.append(local_indexes_dir)
+                try:
+                    if local_resolved != central_resolved and not local_resolved.is_relative_to(
+                        central_resolved
+                    ):
+                        dirs_to_check.append(local_indexes_dir)
+                except AttributeError:  # Python < 3.9 fallback
+                    if str(local_resolved) != str(central_resolved) and str(
+                        central_resolved
+                    ) not in str(local_resolved):
+                        dirs_to_check.append(local_indexes_dir)
         except (OSError, PermissionError):
             pass
 
@@ -1114,10 +1122,10 @@ Examples:
         """Find all indexes with the given name across all projects"""
         matches = []
 
-        # Get all registered projects
+        # Optimization: use the same discovery logic as list_indexes but filter by name
+        # First, find all projects
         global_registry = Path.home() / ".leann" / "projects.json"
         all_projects = []
-
         if global_registry.exists():
             try:
                 import json
@@ -1127,87 +1135,42 @@ Examples:
             except Exception:
                 pass
 
-        # Always include current project
         current_path = Path.cwd()
-        if str(current_path) not in all_projects:
-            all_projects.append(str(current_path))
+        project_paths = [Path(p) for p in all_projects if Path(p).exists()]
+        if current_path not in project_paths:
+            project_paths.append(current_path)
 
-        # Search across all projects
-        for project_dir in all_projects:
-            project_path = Path(project_dir)
-            if not project_path.exists():
-                continue
+        # Track seen paths to avoid duplicates
+        seen_dirs = set()
 
-            # 1) CLI-format index under .leann/indexes/<name>
-            index_dir = project_path / ".leann" / "indexes" / index_name
-            if index_dir.exists():
-                is_current = project_path == current_path
-                matches.append(
-                    {
-                        "project_path": project_path,
-                        "index_dir": index_dir,
-                        "is_current": is_current,
-                        "kind": "cli",
-                    }
-                )
+        for project_path in project_paths:
+            # Discover indexes in this project using the optimized method
+            # We exclude central from others to avoid massive redundancy
+            is_current = project_path == current_path
+            discovered = self._discover_indexes_in_project(project_path, include_central=is_current)
 
-            # 2) App-format indexes
-            # We support two ways of addressing apps:
-            #   a) by the file base (e.g., `pdf_documents`)
-            #   b) by the parent directory name (e.g., `new_txt`)
-            seen_app_meta = set()
-
-            # 2a) by file base
-            for meta_file in project_path.rglob(f"{index_name}.leann.meta.json"):
-                if meta_file.is_file():
-                    # Skip CLI-built indexes' meta under .leann/indexes
-                    try:
-                        cli_indexes_dir = project_path / ".leann" / "indexes"
-                        if cli_indexes_dir.exists() and cli_indexes_dir in meta_file.parents:
-                            continue
-                    except Exception:
-                        pass
-                    is_current = project_path == current_path
-                    key = (str(project_path), str(meta_file))
-                    if key in seen_app_meta:
+            for idx in discovered:
+                if idx["name"] == index_name:
+                    # Resolve path for deduplication
+                    path_resolved = idx["path"].resolve()
+                    if path_resolved in seen_dirs:
                         continue
-                    seen_app_meta.add(key)
+                    seen_dirs.add(path_resolved)
+
                     matches.append(
                         {
                             "project_path": project_path,
-                            "files_dir": meta_file.parent,
-                            "meta_file": meta_file,
+                            "index_dir": idx["path"]
+                            if idx["type"] == "cli"
+                            else idx["path"].parent,
+                            "meta_file": idx["path"]
+                            if idx["type"] == "app"
+                            else (idx["path"] / "documents.leann.meta.json"),
                             "is_current": is_current,
-                            "kind": "app",
-                            "display_name": meta_file.parent.name,
-                            "file_base": meta_file.name.replace(".leann.meta.json", ""),
-                        }
-                    )
-
-            # 2b) by parent directory name
-            for meta_file in project_path.rglob("*.leann.meta.json"):
-                if meta_file.is_file() and meta_file.parent.name == index_name:
-                    # Skip CLI-built indexes' meta under .leann/indexes
-                    try:
-                        cli_indexes_dir = project_path / ".leann" / "indexes"
-                        if cli_indexes_dir.exists() and cli_indexes_dir in meta_file.parents:
-                            continue
-                    except Exception:
-                        pass
-                    is_current = project_path == current_path
-                    key = (str(project_path), str(meta_file))
-                    if key in seen_app_meta:
-                        continue
-                    seen_app_meta.add(key)
-                    matches.append(
-                        {
-                            "project_path": project_path,
-                            "files_dir": meta_file.parent,
-                            "meta_file": meta_file,
-                            "is_current": is_current,
-                            "kind": "app",
-                            "display_name": meta_file.parent.name,
-                            "file_base": meta_file.name.replace(".leann.meta.json", ""),
+                            "kind": idx["type"],
+                            "display_name": idx["name"],
+                            "file_base": idx["path"].name if idx["type"] == "app" else "documents",
+                            "path": idx["path"],
                         }
                     )
 
@@ -1231,7 +1194,7 @@ Examples:
         print(f"✅ Found 1 index named '{index_name}':")
         print(f"   {emoji} Location: {location_info}")
         if kind == "cli":
-            print(f"   📍 Path: {project_path / '.leann' / 'indexes' / index_name}")
+            print(f"   📍 Path: {match['path']}")
         else:
             print(f"   📍 Meta: {match['meta_file']}")
 
@@ -1254,7 +1217,7 @@ Examples:
             )
         else:
             return self._delete_index_directory(
-                match["files_dir"],
+                match["index_dir"],
                 match.get("display_name", index_name),
                 project_path if not is_current else None,
                 is_app=True,
@@ -1280,7 +1243,7 @@ Examples:
 
             # Show path details
             if kind == "cli":
-                print(f"      📍 {project_path / '.leann' / 'indexes' / index_name}")
+                print(f"      📍 {match['path']}")
             else:
                 print(f"      📍 {match['meta_file']}")
 
@@ -1296,7 +1259,7 @@ Examples:
                     if file_base:
                         size_mb = sum(
                             f.stat().st_size
-                            for f in match["files_dir"].glob(f"{file_base}.leann*")
+                            for f in match["index_dir"].glob(f"{file_base}.leann*")
                             if f.is_file()
                         ) / (1024 * 1024)
                 print(f"      📦 Size: {size_mb:.1f} MB")
@@ -1306,8 +1269,12 @@ Examples:
         print("   " + "─" * 50)
 
         if force:
-            print("   ❌ Multiple matches found, but --force specified.")
-            print("   Please run without --force to choose which one to remove.")
+            # If all matches point to the same physical location (should be handled by deduplication, but just in case)
+            # Or if the user really wants to force delete everything with this name.
+            # But for safety, we only allow force delete if there's no ambiguity.
+            # Since we added deduplication, multiple matches now means DIFFERENT physical locations.
+            print("   ❌ Multiple matches found at DIFFERENT locations, but --force specified.")
+            print("   Please run without --force to choose which one to remove safely.")
             return False
 
         try:
@@ -1345,7 +1312,7 @@ Examples:
                     )
                 else:
                     return self._delete_index_directory(
-                        selected_match["files_dir"],
+                        selected_match["index_dir"],
                         selected_match.get("display_name", index_name),
                         project_path if not is_current else None,
                         is_app=True,
