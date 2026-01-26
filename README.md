@@ -373,8 +373,8 @@ LEANN implements a robust, multi-layer fallback pipeline for processing document
 4. [**Docling OCR**](https://github.com/docling-project/docling): The ultimate fallback from IBM Research for scanned PDFs and complex multimodal layouts.
 
 Dedicated extractors are also used for:
-- **Office**: Structural extraction for `.docx` ([python-docx](https://github.com/python-openxml/python-docx)), `.pptx` ([python-pptx](https://github.com/python-openxml/python-pptx)), and `.xlsx` ([openpyxl](https://github.com/ericgazoni/openpyxl)).
-- **Mindmaps**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/)/[Freeplane](https://www.freeplane.org/) (`.mm`).
+- **Office**: Structural extraction for `.docx` ([python-docx](https://github.com/python-openxml/python-docx)), `.pptx` ([python-pptx](https://github.com/scanny/python-pptx)), and `.xlsx` ([openpyxl](https://github.com/ericgazoni/openpyxl)).
+- **Mindmaps**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/)/[Freeplane](https://github.com/freeplane/freeplane) (`.mm`).
 
 <p align="center">
   <img src="videos/paper_clear.gif" alt="LEANN Document Search Demo" width="600">

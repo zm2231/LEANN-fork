@@ -12,8 +12,8 @@
 
 - **📑 Multi-Format Support**: Native handling of `.pdf`, `.txt`, `.md`, `.docx`, `.pptx`, `.xlsx`, and `.mm` (Mindmaps).
 - **🚀 Advanced PDF Pipeline**: Intelligent fallback chain featuring [PyMuPDF](https://github.com/pymupdf/PyMuPDF), [pypdf](https://github.com/py-pdf/pypdf), [pdfplumber](https://github.com/jsvine/pdfplumber), and [**Docling OCR**](https://github.com/docling-project/docling) (IBM Research) for high-fidelity document parsing.
-- **💼 Office Document Extractors**: Structural awareness for Word ([python-docx](https://github.com/python-openxml/python-docx)), Excel ([openpyxl](https://github.com/ericgazoni/openpyxl)), and PowerPoint ([python-pptx](https://github.com/python-openxml/python-pptx)) preserving tables, slides, and sheets.
-- **🧠 Mindmap Parsing**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/) and [Freeplane](https://www.freeplane.org/) (`.mm`) preserving semantic relationships in zettelkasten-like structures.
+- **💼 Office Document Extractors**: Structural awareness for Word ([python-docx](https://github.com/python-openxml/python-docx)), Excel ([openpyxl](https://github.com/ericgazoni/openpyxl)), and PowerPoint ([python-pptx](https://github.com/scanny/python-pptx)) preserving tables, slides, and sheets.
+- **🧠 Mindmap Parsing**: Hierarchical node extraction for [FreeMind](http://freemind.sourceforge.net/) and [Freeplane](https://github.com/freeplane/freeplane) (`.mm`) preserving semantic relationships in zettelkasten-like structures.
 - **📱 Integrated Source Connectors**: Dedicated CLI commands for Apple Mail, Calendar, iMessage, WeChat, and more.
 
 ## ⚡ Performance & Scalability
