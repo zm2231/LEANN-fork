@@ -36,38 +36,48 @@ LEANN is an innovative vector database that democratizes personal AI. Transform 
 
 LEANN achieves this through *graph-based selective recomputation* with *high-degree preserving pruning*, computing embeddings on-demand instead of storing them all. [Illustration Fig →](#️-architecture--how-it-works) | [Paper →](https://arxiv.org/abs/2506.08276)
 
-**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your **[file system](#-personal-data-manager-process-any-documents-pdf-txt-md)**, **[emails](#-your-personal-email-secretary-rag-on-apple-mail)**, **[browser history](#-time-machine-for-the-web-rag-your-entire-browser-history)**, **[chat history](#-wechat-detective-unlock-your-golden-memories)** ([WeChat](https://www.wechat.com/), [iMessage](https://support.apple.com/messages)), **[agent memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)** ([ChatGPT](https://chat.openai.com/), [Claude](https://claude.ai/)), **[live data](#mcp-integration-rag-on-live-data-from-any-platform)** ([Slack](https://slack.com/), [Twitter/X](https://x.com/)), **[codebase](#-claude-code-integration-transform-your-development-workflow)**\* , or external knowledge bases (i.e., 60M documents) - all on your laptop, with zero cloud costs and complete privacy.
+**Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your:
+- 📂 **[File System](#-personal-data-manager)**: Any folder with PDFs, Word, Excel, PowerPoint, and Mindmaps.
+- 📧 **[Emails](#-your-personal-email-secretary-rag-on-apple-mail)**: Direct indexing of [Apple Mail](https://support.apple.com/mail).
+- 📅 **[Calendar](#-your-personal-calendar-assistant)**: Search events in [Apple Calendar](https://support.apple.com/calendar).
+- 🌐 **[Browser History](#-time-machine-for-the-web-rag-your-entire-browser-history)**: Your journey through [Chrome](https://www.google.com/chrome/) or [Brave](https://brave.com/).
+- 💬 **[Chat History](#-wechat-detective-unlock-your-golden-memories)**: Memories from [WeChat](https://www.wechat.com/) or [iMessage](https://support.apple.com/messages).
+- 🤖 **[Agent Memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)**: Archive of [ChatGPT](https://chatgpt.com/) and [Claude](https://claude.ai/) chats.
+- 📡 **[Live Data](#mcp-integration-rag-on-live-data-from-any-platform)**: Real-time data from [Slack](https://slack.com/) and [Twitter/X](https://x.com/) via [MCP](https://modelcontextprotocol.io/).
 
-* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
+---
 
-## Why LEANN?
+## 📚 Documentation
 
-<p align="center">
-  <img src="assets/effects.png" alt="LEANN vs Traditional Vector DB Storage Comparison" width="70%">
-</p>
+LEANN uses a structured documentation approach to get you up to speed quickly:
 
-> **The numbers speak for themselves:** Index 60 million text chunks in just 6GB instead of 201GB. From emails to browser history, everything fits on your laptop. [See detailed benchmarks for different applications below ↓](#-storage-comparison)
+- 🚀 **[Getting Started](docs/getting-started.md)**: Install LEANN and build your first index in minutes.
+- 📧 **[Ingestion Guides](docs/ingestion-guides.md)**: How to index emails, calendar, codebases, and large-scale archives.
+- 🏗️ **[Architecture & Concepts](docs/architecture-concepts.md)**: Deep dive into selective recomputation, AST-aware chunking, and backends.
+- 💻 **[CLI Reference](docs/cli-reference.md)**: Complete list of commands, flags, and environment variables.
 
+## 🚀 Key Features
 
-🔒 **Privacy:** Your data never leaves your laptop. No OpenAI, no cloud, no "terms of service".
+- **📑 Universal Ingestion**: Native support for `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.mm` (Mindmaps), and code files.
+- **🚀 Advanced PDF Processing**: Intelligent fallback chain featuring [PyMuPDF](https://github.com/pymupdf/PyMuPDF), [pypdf](https://github.com/py-pdf/pypdf), and [**Docling OCR**](https://github.com/docling-project/docling).
+- **🧠 AST-Aware Chunking**: Semantic code parsing that understands function and class boundaries.
+- **⚡ High Performance**: Optimized index discovery and terabyte-scale support via **DiskANN**.
+- **📱 Built-in Connectors**: Index your Mail, Calendar, iMessage, and Browser history with zero config.
+- **🔒 Private & Local**: Your data stays on your machine. Compatible with [Ollama](https://ollama.ai).
 
-🪶 **Lightweight:** Graph-based recomputation eliminates heavy embedding storage, while smart graph pruning and CSR format minimize graph storage overhead. Always less storage, less memory usage!
+## 🛠️ Installation
 
-📦 **Portable:** Transfer your entire knowledge base between devices (even with others) with minimal cost - your personal AI memory travels with you.
-
-📈 **Scalability:** Handle messy personal data that would crash traditional vector DBs, easily managing your growing personalized data and agent generated memory!
-
-✨ **No Accuracy Loss:** Maintain the same search quality as heavyweight solutions while using 97% less storage.
-
-## Installation
-
-### 📦 Prerequisites: Install uv
-
-[Install uv](https://docs.astral.sh/uv/getting-started/installation/#installation-methods) first if you don't have it. Typically, you can install it with:
+Quickest way to install globally via `uv`:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+uv tool install leann \
+  --with leann-backend-hnsw \
+  --with leann-backend-diskann \
+  --with astchunk-leann
 ```
+
+For source builds or low-resource setups, see the **[Getting Started Guide](docs/getting-started.md)**.
+
 
 ### 🚀 Quick Install
 
