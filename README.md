@@ -45,6 +45,28 @@ LEANN achieves this through *graph-based selective recomputation* with *high-deg
 - 🤖 **[Agent Memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)**: Archive of [ChatGPT](https://chatgpt.com/) and [Claude](https://claude.ai/) chats.
 - 📡 **[Live Data](#mcp-integration-rag-on-live-data-from-any-platform)**: Real-time data from [Slack](https://slack.com/) and [Twitter/X](https://x.com/) via [MCP](https://modelcontextprotocol.io/).
 
+\* Claude Code only supports basic `grep`-style keyword search. **LEANN** is a drop-in **semantic search MCP service fully compatible with Claude Code**, unlocking intelligent retrieval without changing your workflow. 🔥 Check out [the easy setup →](packages/leann-mcp/README.md)
+
+---
+
+## Why LEANN?
+
+<p align="center">
+  <img src="assets/effects.png" alt="LEANN vs Traditional Vector DB Storage Comparison" width="70%">
+</p>
+
+> **The numbers speak for themselves:** Index 60 million text chunks in just 6GB instead of 201GB. From emails to browser history, everything fits on your laptop. [See detailed benchmarks for different applications below ↓](#-storage-comparison)
+
+🔒 **Privacy:** Your data never leaves your laptop. No OpenAI, no cloud, no "terms of service".
+
+🪶 **Lightweight:** Graph-based recomputation eliminates heavy embedding storage, while smart graph pruning and CSR format minimize graph storage overhead. Always less storage, less memory usage!
+
+📦 **Portable:** Transfer your entire knowledge base between devices (even with others) with minimal cost - your personal AI memory travels with you.
+
+📈 **Scalability:** Handle messy personal data that would crash traditional vector DBs, easily managing your growing personalized data and agent generated memory!
+
+✨ **No Accuracy Loss:** Maintain the same search quality as heavyweight solutions while using 97% less storage.
+
 ---
 
 ## 📚 Documentation
