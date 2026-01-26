@@ -64,6 +64,8 @@ LEANN uses a structured documentation approach to get you up to speed quickly:
 - **⚡ High Performance**: Optimized index discovery and terabyte-scale support via **DiskANN**.
 - **📱 Built-in Connectors**: Index your Mail, Calendar, iMessage, and Browser history with zero config.
 - **📦 Portable**: Transfer your entire knowledge base between devices (even with others) with minimal cost - your personal AI memory travels with you.
+- **📈 Scalability**: Handle messy personal data that would crash traditional vector DBs, easily managing your growing personalized data and agent generated memory!
+- **✨ No Accuracy Loss**: Maintain the same search quality as heavyweight solutions while using 97% less storage.
 - **🔒 Private & Local**: Your data stays on your machine. Compatible with [Ollama](https://ollama.ai).
 
 ## 🛠️ Installation
