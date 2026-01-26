@@ -39,9 +39,9 @@ LEANN achieves this through *graph-based selective recomputation* with *high-deg
 **Ready to RAG Everything?** Transform your laptop into a personal AI assistant that can semantic search your:
 - 📂 **[File System](#-personal-data-manager)**: Any folder with PDFs, Word, Excel, PowerPoint, and Mindmaps.
 - 📧 **[Emails](#-your-personal-email-secretary-rag-on-apple-mail)**: Direct indexing of [Apple Mail](https://support.apple.com/mail).
-- 📅 **[Calendar](#-your-personal-calendar-assistant)**: Search events in [Apple Calendar](https://support.apple.com/calendar).
+- 📅 **[Calendar](#-your-personal-calendar-assistant)**: Search events in [Apple Calendar](https://www.apple.com/macos/icloud/).
 - 🌐 **[Browser History](#-time-machine-for-the-web-rag-your-entire-browser-history)**: Your journey through [Chrome](https://www.google.com/chrome/) or [Brave](https://brave.com/).
-- 💬 **[Chat History](#-wechat-detective-unlock-your-golden-memories)**: Memories from [WeChat](https://www.wechat.com/) or [iMessage](https://support.apple.com/messages).
+- 💬 **[Chat History](#-wechat-detective-unlock-your-golden-memories)**: Memories from [WeChat](https://www.wechat.com/) or [iMessage](https://www.apple.com/ios/messages/).
 - 🤖 **[Agent Memory](#-chatgpt-chat-history-your-personal-ai-conversation-archive)**: Archive of [ChatGPT](https://chatgpt.com/) and [Claude](https://claude.ai/) chats.
 - 📡 **[Live Data](#mcp-integration-rag-on-live-data-from-any-platform)**: Real-time data from [Slack](https://slack.com/) and [Twitter/X](https://x.com/) via [MCP](https://modelcontextprotocol.io/).
 
