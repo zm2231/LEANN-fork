@@ -174,7 +174,16 @@ class ColQwenRAG:
                 continue
 
         print(f"📄 Converted {len(all_images)} pages from {len(pdf_paths)} PDFs")
-        print(f"All metadata: {all_metadata}")
+        if len(all_images) == 0:
+            raise RuntimeError(
+                "No PDF pages were converted to images, so there is nothing to embed.\n"
+                "Common causes:\n"
+                "- `poppler`/`pdftoppm` is missing (required by `pdf2image`)\n"
+                "- The input PDFs are encrypted/corrupt or have zero pages\n\n"
+                "Try:\n"
+                "- Install poppler (macOS: `brew install poppler`, Ubuntu: `apt-get install poppler-utils`)\n"
+                "- Re-run with a known-good PDF\n"
+            )
 
         # Generate embeddings
         print("🧠 Generating embeddings...")
@@ -274,6 +283,9 @@ class ColQwenRAG:
 
     def _embed_images(self, images: list[Image.Image]) -> torch.Tensor:
         """Generate embeddings for a list of images."""
+        if not images:
+            raise RuntimeError("No images provided for embedding.")
+
         dataset = ListDataset(images)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=lambda x: x)
 
@@ -284,6 +296,12 @@ class ColQwenRAG:
                 batch_inputs = self.processor.process_images(batch_images).to(self.device)
                 batch_embeddings = self.model(**batch_inputs)
                 embeddings.append(batch_embeddings.cpu())
+
+        if not embeddings:
+            raise RuntimeError(
+                "Image embedding produced no tensors (empty embedding list). "
+                "This usually indicates that no images were processed successfully."
+            )
 
         return torch.cat(embeddings, dim=0)
 
