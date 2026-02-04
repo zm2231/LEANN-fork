@@ -111,6 +111,7 @@ class ColQwenRAG:
                         device_map="cpu",
                         low_cpu_mem_usage=True,
                     ).eval()
+                    self.processor = ColQwen2Processor.from_pretrained(self.model_name)
                 else:
                     self.model = ColPali.from_pretrained(
                         self.model_name,
@@ -118,6 +119,7 @@ class ColQwenRAG:
                         device_map="cpu",
                         low_cpu_mem_usage=True,
                     ).eval()
+                    self.processor = ColPaliProcessor.from_pretrained(self.model_name)
             else:
                 raise
 
