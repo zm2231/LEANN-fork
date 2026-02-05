@@ -652,9 +652,7 @@ def compute_embeddings_sentence_transformers(
             # Optional compile on supported devices
             if device in ["cuda", "mps"]:
                 try:
-                    hf_model = torch.compile(
-                        hf_model, mode="reduce-overhead", dynamic=True
-                    )
+                    hf_model = torch.compile(hf_model, mode="reduce-overhead", dynamic=True)
                     logger.info(
                         f"Applied torch.compile to HF model for {model_name} "
                         f"(device={device}, dtype={torch_dtype})"
