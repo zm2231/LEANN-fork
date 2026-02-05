@@ -1435,6 +1435,7 @@ Examples:
                 chunk_metadata = {
                     "file_path": file_path or source_path,
                     "file_name": doc.metadata.get("file_name", ""),
+                    "source": source_path,
                 }
 
                 # Add optional metadata if available

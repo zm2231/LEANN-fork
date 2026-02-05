@@ -3,17 +3,21 @@
 </p>
 
 <p align="center">
+  <a href="https://trendshift.io/repositories/15049" target="_blank">
+    <img src="https://trendshift.io/api/badge/repositories/15049" alt="yichuan-w/LEANN | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/>
+  </a>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue.svg" alt="Python Versions">
   <img src="https://github.com/yichuan-w/LEANN/actions/workflows/build-and-publish.yml/badge.svg" alt="CI Status">
   <img src="https://img.shields.io/badge/Platform-Ubuntu%20%26%20Arch%20%26%20WSL%20%7C%20macOS%20(ARM64%2FIntel)-lightgrey" alt="Platform">
   <img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License">
   <img src="https://img.shields.io/badge/MCP-Native%20Integration-blue" alt="MCP Integration">
-  <a href="https://join.slack.com/t/leann-e2u9779/shared_invite/zt-3ckd2f6w1-OX08~NN4gkWhh10PRVBj1Q">
+  <a href="https://join.slack.com/t/leann-e2u9779/shared_invite/zt-3ol2ww9ic-Eg_kB8omwe6xmYVd0epr4Q">
     <img src="https://img.shields.io/badge/Slack-Join-4A154B?logo=slack&logoColor=white" alt="Join Slack">
   </a>
-  <a href="assets/wechat_user_group.JPG" title="Join WeChat group">
-    <img src="https://img.shields.io/badge/WeChat-Join-2DC100?logo=wechat&logoColor=white" alt="Join WeChat group">
-  </a>
+
 </p>
 
 <div align="center">

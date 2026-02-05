@@ -327,8 +327,6 @@ class ColQwenRAG:
         if not images:
             raise RuntimeError("No images provided for embedding.")
 
-        from colpali_engine.utils.torch_utils import ListDataset
-
         dataset = ListDataset(images)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=lambda x: x)
 
