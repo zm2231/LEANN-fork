@@ -12,7 +12,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 # Add LEANN packages to path
 _repo_root = Path(__file__).resolve().parents[1]
@@ -65,6 +65,9 @@ class ColQwenRAG:
                 ColQwen2,
                 ColQwen2Processor,
             )
+            from colpali_engine.utils.torch_utils import ListDataset
+
+            self._list_dataset_cls: type[Any] = ListDataset
 
             if model_type == "colqwen2":
                 self.model_name = "vidore/colqwen2-v1.0"
@@ -327,7 +330,7 @@ class ColQwenRAG:
         if not images:
             raise RuntimeError("No images provided for embedding.")
 
-        dataset = ListDataset(images)
+        dataset = self._list_dataset_cls(images)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=lambda x: x)
 
         embeddings = []

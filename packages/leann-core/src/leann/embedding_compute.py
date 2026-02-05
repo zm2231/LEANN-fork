@@ -483,7 +483,7 @@ def compute_embeddings_sentence_transformers(
             torch.set_num_threads(min(8, os.cpu_count() or 4))
             try:
                 # PyTorch's ContextProp type is complex; cast for type checker
-                torch.backends.mkldnn.enabled = True  # type: ignore[assignment]
+                torch.backends.mkldnn.enabled = True
             except AttributeError:
                 pass
 
@@ -626,7 +626,7 @@ def compute_embeddings_sentence_transformers(
         # This path is reserved for an aggressively optimized FP pipeline
         # (no quantization), mainly for experimentation.
         try:
-            from transformers import AutoModel, AutoTokenizer  # type: ignore
+            from transformers import AutoModel, AutoTokenizer
         except Exception as e:
             raise ImportError(f"transformers is required for manual_tokenize=True: {e}")
 
@@ -652,7 +652,7 @@ def compute_embeddings_sentence_transformers(
             # Optional compile on supported devices
             if device in ["cuda", "mps"]:
                 try:
-                    hf_model = torch.compile(  # type: ignore
+                    hf_model = torch.compile(
                         hf_model, mode="reduce-overhead", dynamic=True
                     )
                     logger.info(
@@ -670,7 +670,7 @@ def compute_embeddings_sentence_transformers(
         show_progress = is_build or len(texts) > 32
         try:
             if show_progress:
-                from tqdm import tqdm  # type: ignore
+                from tqdm import tqdm
 
                 batch_iter = tqdm(
                     range(0, len(texts), batch_size),
@@ -891,7 +891,7 @@ def compute_embeddings_mlx(chunks: list[str], model_name: str, batch_size: int =
         # Tokenize all chunks in the batch
         batch_token_ids = []
         for chunk in batch_chunks:
-            token_ids = tokenizer.encode(chunk)  # type: ignore
+            token_ids = tokenizer.encode(chunk)
             batch_token_ids.append(token_ids)
 
         # Pad sequences to the same length for batch processing
