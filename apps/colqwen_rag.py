@@ -12,7 +12,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 # Add LEANN packages to path
 _repo_root = Path(__file__).resolve().parents[1]
@@ -24,8 +24,6 @@ if str(_leann_hnsw_pkg) not in sys.path:
     sys.path.append(str(_leann_hnsw_pkg))
 
 import torch  # noqa: E402
-from colpali_engine import ColPali, ColPaliProcessor, ColQwen2, ColQwen2Processor  # noqa: E402
-from colpali_engine.utils.torch_utils import ListDataset  # noqa: E402
 from pdf2image import convert_from_path  # noqa: E402
 from PIL import Image  # noqa: E402
 from torch.utils.data import DataLoader  # noqa: E402
@@ -46,6 +44,7 @@ class ColQwenRAG:
         Args:
             model_type: "colqwen2" or "colpali"
         """
+        self._assert_supported_transformers()
         self.model_type = model_type
         self.device = self._get_device()
         # Use float32 on MPS to avoid memory issues, float16 on CUDA, bfloat16 on CPU
@@ -60,6 +59,16 @@ class ColQwenRAG:
 
         # Load model and processor with MPS-optimized settings
         try:
+            from colpali_engine import (
+                ColPali,
+                ColPaliProcessor,
+                ColQwen2,
+                ColQwen2Processor,
+            )
+            from colpali_engine.utils.torch_utils import ListDataset
+
+            self._list_dataset_cls: type[Any] = ListDataset
+
             if model_type == "colqwen2":
                 self.model_name = "vidore/colqwen2-v1.0"
                 if self.device.type == "mps":
@@ -111,6 +120,7 @@ class ColQwenRAG:
                         device_map="cpu",
                         low_cpu_mem_usage=True,
                     ).eval()
+                    self.processor = ColQwen2Processor.from_pretrained(self.model_name)
                 else:
                     self.model = ColPali.from_pretrained(
                         self.model_name,
@@ -118,8 +128,42 @@ class ColQwenRAG:
                         device_map="cpu",
                         low_cpu_mem_usage=True,
                     ).eval()
+                    self.processor = ColPaliProcessor.from_pretrained(self.model_name)
             else:
                 raise
+
+    def _assert_supported_transformers(self) -> None:
+        """Fail fast on unsupported transformers versions."""
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            transformers_version = version("transformers")
+        except PackageNotFoundError:
+            return
+
+        def _parse_semver(value: str) -> tuple[int, int, int]:
+            parts = value.split(".")
+            numbers: list[int] = []
+            for part in parts[:3]:
+                digits = []
+                for ch in part:
+                    if ch.isdigit():
+                        digits.append(ch)
+                    else:
+                        break
+                numbers.append(int("".join(digits)) if digits else 0)
+            while len(numbers) < 3:
+                numbers.append(0)
+            return tuple(numbers)  # type: ignore[return-value]
+
+        if _parse_semver(transformers_version) >= (4, 46, 0):
+            raise RuntimeError(
+                "Unsupported transformers version detected. "
+                "LEANN currently requires transformers<4.46 due to typing changes "
+                "and transformers 5.x removing symbols such as HybridCache. "
+                "Please install a compatible version, e.g. "
+                '`pip install "transformers<4.46"`.'
+            )
 
     def _get_device(self):
         """Auto-select best available device."""
@@ -286,7 +330,7 @@ class ColQwenRAG:
         if not images:
             raise RuntimeError("No images provided for embedding.")
 
-        dataset = ListDataset(images)
+        dataset = self._list_dataset_cls(images)
         dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=lambda x: x)
 
         embeddings = []

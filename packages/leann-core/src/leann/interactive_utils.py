@@ -12,9 +12,9 @@ from typing import Callable, Optional
 
 # Try to import readline with fallback for Windows
 HAS_READLINE = False
-readline = None  # type: ignore[assignment]
+readline = None
 try:
-    import readline  # type: ignore[no-redef]
+    import readline
 
     HAS_READLINE = True
 except ImportError:
