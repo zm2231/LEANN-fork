@@ -31,6 +31,15 @@
   </p>
 </div>
 
+<div align="center">
+  <h3>💬 Join our Slack community!</h3>
+  <p>
+    We'd love for you to be part of the LEANN community!<br>
+    👉 <a href="https://join.slack.com/t/leann-e2u9779/shared_invite/zt-3ol2ww9ic-Eg_kB8omwe6xmYVd0epr4Q"><b>Join LEANN Slack</b></a><br>
+    If the invite link has expired or you have trouble joining, please <a href="https://github.com/yichuan-w/LEANN/issues">open an issue</a> and we'll help you get in!
+  </p>
+</div>
+
 <h2 align="center" tabindex="-1" class="heading-element" dir="auto">
     The smallest vector index in the world. RAG Everything with LEANN!
 </h2>
