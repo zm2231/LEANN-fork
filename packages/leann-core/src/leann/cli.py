@@ -337,6 +337,21 @@ Examples:
 
         subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
+        def add_embedding_args(target_parser: argparse.ArgumentParser) -> None:
+            target_parser.add_argument(
+                "--embedding-model",
+                type=str,
+                default="facebook/contriever",
+                help="Embedding model (default: facebook/contriever)",
+            )
+            target_parser.add_argument(
+                "--embedding-mode",
+                type=str,
+                default="sentence-transformers",
+                choices=["sentence-transformers", "openai", "mlx", "ollama"],
+                help="Embedding backend mode (default: sentence-transformers)",
+            )
+
         # Build command
         build_parser = subparsers.add_parser("build", help="Build document index")
         build_parser.add_argument(
@@ -666,6 +681,7 @@ Examples:
         browser_parser.add_argument(
             "--max-items", type=int, default=1000, help="Max history items to index"
         )
+        add_embedding_args(browser_parser)
 
         # Email indexing command
         email_parser = subparsers.add_parser("index-email", help="Index Apple Mail emails")
@@ -675,6 +691,7 @@ Examples:
         email_parser.add_argument(
             "--max-items", type=int, default=2000, help="Max emails to index (default: 2000)"
         )
+        add_embedding_args(email_parser)
 
         # Calendar indexing command
         calendar_parser = subparsers.add_parser(
@@ -689,6 +706,7 @@ Examples:
         calendar_parser.add_argument(
             "--max-items", type=int, default=1000, help="Max events to index (default: 1000)"
         )
+        add_embedding_args(calendar_parser)
 
         # WeChat indexing command
         wechat_parser = subparsers.add_parser("index-wechat", help="Index WeChat chat history")
@@ -704,6 +722,7 @@ Examples:
         wechat_parser.add_argument(
             "--max-items", type=int, default=1000, help="Max chat entries to index"
         )
+        add_embedding_args(wechat_parser)
 
         # iMessage indexing command
         imessage_parser = subparsers.add_parser("index-imessage", help="Index iMessage history")
@@ -714,6 +733,7 @@ Examples:
         imessage_parser.add_argument(
             "--max-items", type=int, default=2000, help="Max messages to index"
         )
+        add_embedding_args(imessage_parser)
 
         # Slack indexing command
         slack_parser = subparsers.add_parser("index-slack", help="Index Slack workspace via MCP")
@@ -728,6 +748,7 @@ Examples:
         )
         slack_parser.add_argument("--workspace", type=str, help="Slack workspace name")
         slack_parser.add_argument("--channels", nargs="+", help="Specific channels to index")
+        add_embedding_args(slack_parser)
 
         # ChatGPT indexing command
         chatgpt_parser = subparsers.add_parser("index-chatgpt", help="Index ChatGPT export")
@@ -737,6 +758,7 @@ Examples:
         chatgpt_parser.add_argument(
             "--export-path", type=str, required=True, help="Path to export file"
         )
+        add_embedding_args(chatgpt_parser)
 
         # Claude indexing command
         claude_parser = subparsers.add_parser("index-claude", help="Index Claude export")
@@ -746,6 +768,7 @@ Examples:
         claude_parser.add_argument(
             "--export-path", type=str, required=True, help="Path to export file"
         )
+        add_embedding_args(claude_parser)
 
         return parser
 
