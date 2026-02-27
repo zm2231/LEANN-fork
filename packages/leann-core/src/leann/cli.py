@@ -611,6 +611,12 @@ Examples:
             default=None,
             help="API key for cloud LLM providers (OpenAI, Anthropic)",
         )
+        react_parser.add_argument(
+            "--serper-api-key", type=str, default=None, help="Serper API key for web search"
+        )
+        react_parser.add_argument(
+            "--jina-api-key", type=str, default=None, help="Jina API key for content parsing"
+        )
 
         # List command
         subparsers.add_parser("list", help="List all indexes")
@@ -2546,6 +2552,8 @@ Examples:
             index_path=index_path,
             llm_config=llm_config,
             max_iterations=args.max_iterations,
+            serper_api_key=args.serper_api_key,
+            jina_api_key=args.jina_api_key,
         )
 
         print(f"\n🔍 Question: {query}\n")
