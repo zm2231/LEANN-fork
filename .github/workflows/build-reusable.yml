@@ -211,10 +211,12 @@ jobs:
 
           retry 5 choco install swig -y --no-progress
           retry 5 choco install nuget.commandline -y --no-progress
-          # pkgconfiglite via Chocolatey is flaky; fall back to direct download
+          # pkgconfiglite via Chocolatey is flaky (exits 0 even on failure);
+          # verify the binary exists and fall back to direct download.
+          retry 3 choco install pkgconfiglite -y --no-progress || true
           PKG_CONFIG_DIR="C:/ProgramData/chocolatey/bin"
-          if ! retry 3 choco install pkgconfiglite -y --no-progress; then
-            echo "Chocolatey pkgconfiglite failed, downloading directly..."
+          if [[ ! -f "${PKG_CONFIG_DIR}/pkg-config.exe" ]]; then
+            echo "pkg-config.exe not found after choco, downloading directly..."
             PKG_CONFIG_DIR="${RUNNER_TEMP}/pkg-config"
             mkdir -p "${PKG_CONFIG_DIR}"
             curl -fsSL -o "${RUNNER_TEMP}/pkgconfiglite.zip" \
