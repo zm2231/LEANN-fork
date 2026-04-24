@@ -104,7 +104,6 @@ class FileSynchronizer:
         except ValueError:
             # Empty directory — no files to hash
             return file_hashes
-        # print('reader.iter_data() length', len(list(reader.iter_data())))
 
         for file in reader.iter_data():
             if not file:
