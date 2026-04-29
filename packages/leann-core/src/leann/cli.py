@@ -844,7 +844,8 @@ Examples:
         _index_cache: dict = {}
 
         def _get_indexes(path, exclude=None):
-            key = (path, tuple(exclude or []))
+            # Canonicalize so /a/b and /a/x/../b produce the same cache key
+            key = (path.resolve(), tuple(p.resolve() for p in (exclude or [])))
             if key not in _index_cache:
                 _index_cache[key] = self._discover_indexes_in_project(path, exclude_dirs=exclude)
             return _index_cache[key]
@@ -854,10 +855,12 @@ Examples:
         print(f"   {current_path}")
         print("   " + "─" * 45)
 
-        # Only scan current dir if it's a registered leann project — avoids rglob on broad paths like ~
+        # Only scan current dir if it's a registered leann project — avoids rglob on broad paths like ~.
+        # Check CLI-format (.leann/indexes) and app-only projects (registered in projects.json).
+        _current_path_str = str(current_path.resolve())
         _current_is_project = (
             (current_path / ".leann" / "indexes").exists()
-            or current_path in valid_projects
+            or _current_path_str in all_projects
         )
         current_indexes = _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
         if current_indexes:
