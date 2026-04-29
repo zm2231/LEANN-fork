@@ -914,7 +914,7 @@ Examples:
                         example_name = current_index_dirs[0].name
                         print(f'   leann search {example_name} "your query"')
                         print(f"   leann ask {example_name} --interactive")
-            else:
+            elif total_indexes == 0:
                 print("\n💡 Create your first index:")
                 print("   leann build my-docs --docs ./documents")
 
@@ -967,7 +967,7 @@ Examples:
         _SKIP_DIRS = {
             "node_modules", ".git", "__pycache__", ".venv", "venv",
             ".next", "dist", "build", ".tox", ".eggs", "target",
-            ".worktrees", ".cache",
+            ".worktrees", ".cache", ".leann",
         }
 
         def _walk_meta_files(root: Path):

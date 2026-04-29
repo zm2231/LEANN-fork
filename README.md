@@ -1,3 +1,5 @@
+> **Custom fork** — branch `zain/custom-patches`. See `CLAUDE.md` for install instructions and patch notes.
+
 <p align="center">
   <img src="assets/logo-text.png" alt="LEANN Logo" width="400">
 </p>
