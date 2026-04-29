@@ -1347,6 +1347,9 @@ class LeannSearcher:
         final_kwargs["daemon_ttl_seconds"] = self._daemon_ttl_seconds
         if self.embedding_options:
             final_kwargs.setdefault("embedding_options", self.embedding_options)
+        # Pass already-loaded metadata so BaseSearcher._load_meta() isn't called again.
+        # This ensures the fallback .leann.meta.json path is honoured end-to-end.
+        final_kwargs.setdefault("meta", self.meta_data)
         self.backend_impl: LeannBackendSearcherInterface = backend_factory.searcher(
             index_path, **final_kwargs
         )
