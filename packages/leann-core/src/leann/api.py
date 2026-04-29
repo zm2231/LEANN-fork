@@ -1296,13 +1296,17 @@ class LeannSearcher:
         if not Path(index_path).is_absolute():
             index_path = str(Path(index_path).resolve())
 
-        self.meta_path_str = f"{index_path}.meta.json"
-        if not Path(self.meta_path_str).exists():
+        meta_path = Path(f"{index_path}.meta.json")
+        if not meta_path.exists():
+            fallback = Path(f"{index_path}.leann.meta.json")
+            if fallback.exists():
+                meta_path = fallback
+        self.meta_path_str = str(meta_path)
+        if not meta_path.exists():
             parent_dir = Path(index_path).parent
             print(
                 f"Leann metadata file not found at {self.meta_path_str}, and you may need to rm -rf {parent_dir}"
             )
-            # highlight in red the filenotfound error
             raise FileNotFoundError(
                 f"Leann metadata file not found at {self.meta_path_str}, \033[91m you may need to rm -rf {parent_dir}\033[0m"
             )
