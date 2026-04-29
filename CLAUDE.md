@@ -135,6 +135,40 @@ leann list
 leann remove my-docs
 ```
 
+## Custom Fork — `zain/custom-patches` branch
+
+This repo is maintained as a reference fork. Local patches live on `zain/custom-patches` on top of upstream `main`.
+
+### Install from this branch (leann-core from source, backends from PyPI)
+
+```bash
+uv tool install --reinstall \
+  /Volumes/4/GitHub/pi-ult/references/LEANN/packages/leann-core \
+  --with leann-backend-hnsw \
+  --with leann-backend-diskann
+```
+
+> Backends are installed from PyPI because they require native builds (libomp, DiskANN submodules).
+> Only `leann-core` (CLI + API) is sourced from this branch.
+
+### Keeping up with upstream
+
+```bash
+git fetch origin
+git rebase origin/main   # on zain/custom-patches
+# Reinstall after rebase
+uv tool install --reinstall \
+  /Volumes/4/GitHub/pi-ult/references/LEANN/packages/leann-core \
+  --with leann-backend-hnsw --with leann-backend-diskann
+```
+
+### Patches applied (on top of upstream)
+
+| Commit | Description |
+|--------|-------------|
+| `fix(api)` | `LeannSearcher` falls back to `.leann.meta.json` extension when `.meta.json` not found |
+| `perf(list)` | Skip home-dir rglob when cwd isn't a leann project; cache discovery results (was scanning each project twice); replace `rglob` with `os.walk` that skips `node_modules`, `.git`, `.leann`, `.worktrees`, `.venv`, and other heavy dirs; suppress spurious "build your first index" tip when other projects exist |
+
 ## Common Development Tasks
 
 Running example RAG applications:
