@@ -840,15 +840,26 @@ Examples:
 
         total_indexes = 0
         current_indexes_count = 0
+        # Cache results to avoid scanning each project twice (display + summary)
+        _index_cache: dict = {}
+
+        def _get_indexes(path, exclude=None):
+            key = (path, tuple(exclude or []))
+            if key not in _index_cache:
+                _index_cache[key] = self._discover_indexes_in_project(path, exclude_dirs=exclude)
+            return _index_cache[key]
 
         # Show current project first (most important)
         print("\n🏠 Current Project")
         print(f"   {current_path}")
         print("   " + "─" * 45)
 
-        current_indexes = self._discover_indexes_in_project(
-            current_path, exclude_dirs=other_projects
+        # Only scan current dir if it's a registered leann project — avoids rglob on broad paths like ~
+        _current_is_project = (
+            (current_path / ".leann" / "indexes").exists()
+            or current_path in valid_projects
         )
+        current_indexes = _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
         if current_indexes:
             for idx in current_indexes:
                 total_indexes += 1
@@ -866,7 +877,7 @@ Examples:
             print("   " + "─" * 45)
 
             for project_path in other_projects:
-                project_indexes = self._discover_indexes_in_project(project_path)
+                project_indexes = _get_indexes(project_path)
                 if not project_indexes:
                     continue
 
@@ -886,15 +897,11 @@ Examples:
             print("💡 Get started:")
             print("   leann build my-docs --docs ./documents")
         else:
-            # Count only projects that have at least one discoverable index
-            projects_count = 0
-            for p in valid_projects:
-                if p == current_path:
-                    discovered = self._discover_indexes_in_project(p, exclude_dirs=other_projects)
-                else:
-                    discovered = self._discover_indexes_in_project(p)
-                if len(discovered) > 0:
-                    projects_count += 1
+            # Count only projects that have at least one discoverable index (use cache)
+            projects_count = sum(
+                1 for p in valid_projects
+                if len(_get_indexes(p, exclude=other_projects if p == current_path else None)) > 0
+            )
             print(f"📊 Total: {total_indexes} indexes across {projects_count} projects")
 
             if current_indexes_count > 0:
@@ -957,7 +964,21 @@ Examples:
 
         # 2. Apps format: *.leann.meta.json files anywhere in the project
         cli_indexes_dir = project_path / ".leann" / "indexes"
-        for meta_file in project_path.rglob("*.leann.meta.json"):
+        _SKIP_DIRS = {
+            "node_modules", ".git", "__pycache__", ".venv", "venv",
+            ".next", "dist", "build", ".tox", ".eggs", "target",
+            ".worktrees", ".cache",
+        }
+
+        def _walk_meta_files(root: Path):
+            import os as _os
+            for dirpath, dirnames, filenames in _os.walk(root):
+                dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+                for fname in filenames:
+                    if fname.endswith(".leann.meta.json"):
+                        yield Path(dirpath) / fname
+
+        for meta_file in _walk_meta_files(project_path):
             if meta_file.is_file():
                 # Skip CLI-built indexes (which store meta under .leann/indexes/<name>/)
                 try:
