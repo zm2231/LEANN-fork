@@ -825,14 +825,16 @@ class OpenAIChat(LLMInterface):
             "temperature": kwargs.get("temperature", 0.7),
         }
 
-        # Handle max_tokens vs max_completion_tokens based on model
+        # Handle max_tokens vs max_completion_tokens based on model.
+        # Reasoning-style OpenAI-compatible models (o-series and gpt-5 family in
+        # local proxies) may reject or ignore legacy max_tokens and can return
+        # message.content=None when only reasoning/auxiliary fields are present.
         max_tokens = kwargs.get("max_tokens", 1000)
-        if "o3" in self.model or "o4" in self.model or "o1" in self.model:
-            # o-series models use max_completion_tokens
+        reasoning_style_model = any(marker in self.model for marker in ["o3", "o4", "o1", "gpt-5"])
+        if reasoning_style_model:
             params["max_completion_tokens"] = max_tokens
             params["temperature"] = 1.0
         else:
-            # Other models use max_tokens
             params["max_tokens"] = max_tokens
 
         # Handle thinking budget for reasoning models
@@ -863,7 +865,30 @@ class OpenAIChat(LLMInterface):
             )
             if response.choices[0].finish_reason == "length":
                 print("The query is exceeding the maximum allowed number of tokens")
-            return response.choices[0].message.content.strip()
+            message = response.choices[0].message
+            content = getattr(message, "content", None)
+            if content is None:
+                # Some OpenAI-compatible proxies/reasoning models expose text in
+                # nonstandard fields or return None when the model produced only
+                # hidden reasoning. Avoid crashing the ReAct loop; surface an
+                # actionable empty-response marker instead.
+                for attr in ("reasoning_content", "reasoning", "text"):
+                    alt = getattr(message, attr, None)
+                    if alt:
+                        content = alt
+                        break
+            if isinstance(content, list):
+                parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        parts.append(str(part.get("text") or part.get("content") or ""))
+                    else:
+                        parts.append(str(getattr(part, "text", part)))
+                content = "".join(parts)
+            if content is None:
+                logger.warning("OpenAI-compatible response message.content was None for model %s", self.model)
+                return ""
+            return str(content).strip()
         except Exception as e:
             logger.error(f"Error communicating with OpenAI: {e}")
             return f"Error: Could not get a response from OpenAI. Details: {e}"
