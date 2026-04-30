@@ -128,8 +128,11 @@ class ReActAgent:
         llm: LLMInterface | None = None,
         llm_config: dict[str, Any] | None = None,
         max_iterations: int = 5,
-        serper_api_key: str | None = None,
+        exa_api_key: str | None = None,
+        searxng_url: str | None = None,
         jina_api_key: str | None = None,
+        # Legacy — ignored, kept for call-site compat
+        serper_api_key: str | None = None,
     ):
         if searchers is not None and searcher is not None:
             raise ValueError("Pass either searcher= or searchers=, not both.")
@@ -166,8 +169,12 @@ class ReActAgent:
 
         self.max_iterations = max_iterations
         self.search_history: list[dict[str, Any]] = []
-        self.web_searcher = WebSearcher(api_key=serper_api_key, jina_api_key=jina_api_key)
-        self.web_search_available = bool(self.web_searcher.api_key)
+        self.web_searcher = WebSearcher(
+            exa_api_key=exa_api_key,
+            searxng_url=searxng_url,
+            jina_api_key=jina_api_key,
+        )
+        self.web_search_available = self.web_searcher.available
 
         # Expose .searcher for single-index backwards compatibility
         if not self._multi:
@@ -544,7 +551,8 @@ def create_react_agent(
     index_path: str | dict[str, str],
     llm_config: dict[str, Any] | None = None,
     max_iterations: int = 5,
-    serper_api_key: str | None = None,
+    exa_api_key: str | None = None,
+    searxng_url: str | None = None,
     jina_api_key: str | None = None,
     **searcher_kwargs,
 ) -> ReActAgent:
@@ -557,21 +565,10 @@ def create_react_agent(
     Multi-index:
         create_react_agent({"raw": "rubio-raw-sources", "evidence": "rubio-cf-evidence"})
     """
+    web_kwargs = dict(exa_api_key=exa_api_key, searxng_url=searxng_url, jina_api_key=jina_api_key)
     if isinstance(index_path, dict):
         searchers = {alias: LeannSearcher(path, **searcher_kwargs) for alias, path in index_path.items()}
-        return ReActAgent(
-            searchers=searchers,
-            llm_config=llm_config,
-            max_iterations=max_iterations,
-            serper_api_key=serper_api_key,
-            jina_api_key=jina_api_key,
-        )
+        return ReActAgent(searchers=searchers, llm_config=llm_config, max_iterations=max_iterations, **web_kwargs)
     else:
         searcher = LeannSearcher(index_path, **searcher_kwargs)
-        return ReActAgent(
-            searcher=searcher,
-            llm_config=llm_config,
-            max_iterations=max_iterations,
-            serper_api_key=serper_api_key,
-            jina_api_key=jina_api_key,
-        )
+        return ReActAgent(searcher=searcher, llm_config=llm_config, max_iterations=max_iterations, **web_kwargs)
