@@ -123,7 +123,12 @@ class WebSearcher:
         merged: list[dict[str, Any]] = []
         for key in ("exa", "searxng"):
             if key in futures:
-                for item in futures[key].result():
+                try:
+                    items = futures[key].result()
+                except Exception as exc:
+                    logger.error("%s search raised an exception: %s", key, exc)
+                    items = []
+                for item in items:
                     url = item.get("link", "")
                     if url and url not in seen_urls:
                         seen_urls.add(url)

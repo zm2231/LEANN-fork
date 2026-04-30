@@ -11,7 +11,7 @@ Supports:
   - Metadata filter passthrough from tool syntax to LeannSearcher.search():
     leann_search("q", filter={"field": "value"})        # normalized to {"field": {"==": "value"}}
     search_raw("q", filter={"field": {"contains": "x"}}) # explicit operator, passed through
-  - Web search via Serper API (when configured)
+  - Web search via Exa (neural) + SearXNG (meta-search) in parallel (when configured)
   - Page fetching via Jina Reader (when configured)
 """
 
@@ -442,7 +442,7 @@ class ReActAgent:
                 query_str = action.split(":", 1)[1]
                 if not self.web_search_available:
                     observation = (
-                        "Web search is not available (no SERPER_API_KEY). "
+                        "Web search is not available (set EXA_API_KEY or SEARXNG_URL to enable). "
                         "Use a local search tool instead."
                     )
                 else:

@@ -34,9 +34,9 @@ def _make_searcher() -> MagicMock:
 
 
 def test_prompt_includes_web_tools_when_key_present():
-    """When SERPER_API_KEY is set, prompt should list all three tools."""
+    """When EXA_API_KEY is set, prompt should list all three tools."""
     searcher = _make_searcher()
-    agent = ReActAgent(searcher=searcher, llm=MagicMock(), serper_api_key="test-key")
+    agent = ReActAgent(searcher=searcher, llm=MagicMock(), exa_api_key="test-key")
     prompt = agent._create_react_prompt("test question", 1, [])
     assert "web_search" in prompt
     assert "visit_page" in prompt
@@ -45,10 +45,10 @@ def test_prompt_includes_web_tools_when_key_present():
 
 
 def test_prompt_excludes_web_tools_when_no_key():
-    """When no SERPER_API_KEY, prompt should only show leann_search."""
+    """When no EXA_API_KEY, prompt should only show leann_search."""
     searcher = _make_searcher()
     with patch.dict("os.environ", {}, clear=False):
-        agent = ReActAgent(searcher=searcher, llm=MagicMock(), serper_api_key=None)
+        agent = ReActAgent(searcher=searcher, llm=MagicMock(), exa_api_key=None)
     prompt = agent._create_react_prompt("test question", 1, [])
     assert "leann_search" in prompt
     assert "web_search" not in prompt or "not available" in prompt
@@ -92,7 +92,7 @@ def test_web_only_routing():
             "Thought: Got it.\nAction: Final Answer: Python 3.13 has new features.",
         ]
         agent = ReActAgent(
-            searcher=searcher, llm=mock_llm, max_iterations=3, serper_api_key="test-key"
+            searcher=searcher, llm=mock_llm, max_iterations=3, exa_api_key="test-key"
         )
         agent.run("What's new in Python 3.13?", top_k=2)
 
@@ -120,7 +120,7 @@ def test_mixed_routing_local_then_web():
             "Thought: I can compare now.\nAction: Final Answer: Our search is good but could improve.",
         ]
         agent = ReActAgent(
-            searcher=searcher, llm=mock_llm, max_iterations=5, serper_api_key="test-key"
+            searcher=searcher, llm=mock_llm, max_iterations=5, exa_api_key="test-key"
         )
         agent.run("Compare our search with best practices", top_k=2)
 
@@ -147,7 +147,7 @@ def test_web_results_formatted_as_observations():
             "Thought: Done.\nAction: Final Answer: Found it.",
         ]
         agent = ReActAgent(
-            searcher=searcher, llm=mock_llm, max_iterations=3, serper_api_key="test-key"
+            searcher=searcher, llm=mock_llm, max_iterations=3, exa_api_key="test-key"
         )
         agent.run("test", top_k=2)
 
@@ -168,7 +168,7 @@ def test_visit_page_content_truncated():
             "Thought: Done.\nAction: Final Answer: Got the content.",
         ]
         agent = ReActAgent(
-            searcher=searcher, llm=mock_llm, max_iterations=3, serper_api_key="test-key"
+            searcher=searcher, llm=mock_llm, max_iterations=3, exa_api_key="test-key"
         )
         agent.run("read docs", top_k=2)
 
@@ -208,7 +208,7 @@ def test_web_search_no_api_key_graceful():
         "Thought: Done.\nAction: Final Answer: Here's what I found locally.",
     ]
     with patch.dict("os.environ", {}, clear=False):
-        agent = ReActAgent(searcher=searcher, llm=mock_llm, max_iterations=5, serper_api_key=None)
+        agent = ReActAgent(searcher=searcher, llm=mock_llm, max_iterations=5, exa_api_key=None)
     answer = agent.run("test", top_k=2)
 
     assert agent.search_history[0]["results_count"] == 0
@@ -251,7 +251,7 @@ def test_visit_page_404_graceful():
             "Thought: Page not found.\nAction: Final Answer: Page was not accessible.",
         ]
         agent = ReActAgent(
-            searcher=searcher, llm=mock_llm, max_iterations=3, serper_api_key="test-key"
+            searcher=searcher, llm=mock_llm, max_iterations=3, exa_api_key="test-key"
         )
         answer = agent.run("read page", top_k=2)
 
@@ -276,7 +276,7 @@ def test_max_iterations_with_mixed_sources():
             "Based on all searches, LEANN is a storage-efficient vector DB.",
         ]
         agent = ReActAgent(
-            searcher=searcher, llm=mock_llm, max_iterations=2, serper_api_key="test-key"
+            searcher=searcher, llm=mock_llm, max_iterations=2, exa_api_key="test-key"
         )
         answer = agent.run("Compare approaches", top_k=2)
 
