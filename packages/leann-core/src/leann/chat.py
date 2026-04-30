@@ -1107,8 +1107,9 @@ def get_llm(llm_config: Optional[dict[str, Any]] = None) -> LLMInterface:
     if llm_config is None:
         llm_config = {
             "type": "openai",
-            "model": "gpt-4o",
+            "model": os.getenv("LEANN_LLM_MODEL", "gpt-5.5"),
             "api_key": os.getenv("OPENAI_API_KEY"),
+            "base_url": resolve_openai_base_url(),  # reads LEANN_OPENAI_BASE_URL / OPENAI_BASE_URL
         }
 
     llm_type = llm_config.get("type", "openai")
