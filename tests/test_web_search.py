@@ -145,3 +145,45 @@ def test_get_page_content_falls_back_to_jina():
 
         content = ws.get_page_content("https://example.com")
     assert content == "Jina markdown content"
+
+
+def test_get_page_content_exa_exception_falls_back_to_jina():
+    """If Exa /contents raises, Jina fallback is used."""
+    ws = WebSearcher(exa_api_key="k")
+    with patch("leann.web_search.requests.post", side_effect=Exception("exa down")), \
+         patch("leann.web_search.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status = MagicMock()
+        mock_get.return_value.text = "Jina fallback"
+        content = ws.get_page_content("https://example.com")
+    assert content == "Jina fallback"
+
+
+def test_get_page_content_both_fail_returns_error_string():
+    """If both Exa and Jina fail, an error string is returned (no raise)."""
+    ws = WebSearcher(exa_api_key="k")
+    with patch("leann.web_search.requests.post", side_effect=Exception("exa down")), \
+         patch("leann.web_search.requests.get", side_effect=Exception("jina down")):
+        content = ws.get_page_content("https://example.com")
+    assert "Error" in content or "error" in content.lower()
+
+
+def test_future_exception_isolated_other_provider_still_returns():
+    """If one provider's future raises, the other's results are still returned."""
+    ws = WebSearcher(exa_api_key="k", searxng_url="http://x")
+
+    def bad_exa(*_):
+        raise RuntimeError("network error")
+
+    ws._exa_search = bad_exa
+    ws._searxng_search = MagicMock(return_value=[_searxng_result("https://ok.com")])
+
+    results = ws.search("test")
+    assert any(r["link"] == "https://ok.com" for r in results)
+
+
+def test_searxng_base_url_env_fallback(monkeypatch):
+    """SEARXNG_BASE_URL env var should be accepted as the SearXNG URL."""
+    monkeypatch.setenv("SEARXNG_BASE_URL", "http://127.0.0.1:9999")
+    ws = WebSearcher()
+    assert ws.searxng_url == "http://127.0.0.1:9999"
+    assert ws.available is True

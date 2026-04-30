@@ -619,10 +619,16 @@ Examples:
             help="API key for cloud LLM providers (OpenAI, Anthropic)",
         )
         react_parser.add_argument(
-            "--serper-api-key",
+            "--exa-api-key",
             type=str,
             default=None,
-            help="Serper API key for web search (or set SERPER_API_KEY env var)",
+            help="Exa API key for neural web search (or set EXA_API_KEY env var)",
+        )
+        react_parser.add_argument(
+            "--searxng-url",
+            type=str,
+            default=None,
+            help="SearXNG base URL for meta-search (or set SEARXNG_URL env var)",
         )
         react_parser.add_argument(
             "--jina-api-key",
@@ -3197,14 +3203,15 @@ Examples:
             index_path=index_path,
             llm_config=llm_config,
             max_iterations=args.max_iterations,
-            serper_api_key=getattr(args, "serper_api_key", None),
+            exa_api_key=getattr(args, "exa_api_key", None),
+            searxng_url=getattr(args, "searxng_url", None),
             jina_api_key=getattr(args, "jina_api_key", None),
         )
 
         if agent.web_search_available:
-            print("🌐 Web search enabled (Serper API key detected)")
+            print("🌐 Web search enabled (Exa + SearXNG)")
         else:
-            print("📚 Local search only (no Serper API key)")
+            print("📚 Local search only (set EXA_API_KEY or SEARXNG_URL to enable web search)")
 
         print(f"\n🔍 Question: {query}\n")
         answer = agent.run(query, top_k=args.top_k)
