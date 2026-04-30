@@ -97,6 +97,15 @@ def test_alias_sanitization():
     assert "rubio-raw sources" not in prompt
 
 
+def test_alias_collision_raises():
+    """Two aliases that sanitize to the same token should raise ValueError."""
+    with pytest.raises(ValueError, match="collision"):
+        ReActAgent(
+            searchers={"raw-sources": _make_searcher(), "raw sources": _make_searcher()},
+            llm=MagicMock(),
+        )
+
+
 # ── Named searchers: routing ──────────────────────────────────────────
 
 
@@ -225,9 +234,12 @@ def test_invalid_filter_returns_observation_not_crash():
     ]
     agent = ReActAgent(searcher=searcher, llm=mock_llm, max_iterations=3)
     answer = agent.run("test")
-    # Should not crash and the bad-filter observation should reach the LLM
+    # Should not crash; bad-filter error observation must reach the LLM as an Observation block
     second_prompt = mock_llm.ask.call_args_list[1][0][0]
-    assert "filter" in second_prompt.lower() or "invalid" in second_prompt.lower() or "error" in second_prompt.lower()
+    observations_block = second_prompt.split("Previous observations:")[1] if "Previous observations:" in second_prompt else second_prompt
+    assert "invalid" in observations_block.lower() or "error" in observations_block.lower() or "parse" in observations_block.lower()
+    # The bad search must NOT have been called (filter error, not search)
+    searcher.search.assert_not_called()
     assert answer is not None
 
 

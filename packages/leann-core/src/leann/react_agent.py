@@ -53,26 +53,52 @@ def _normalize_filter(raw: dict) -> dict:
     return normalized
 
 
+_VALID_OPERATORS = frozenset({
+    "==", "!=", "<", "<=", ">", ">=",
+    "in", "not_in", "contains", "starts_with", "ends_with",
+    "is_true", "is_false",
+})
+
+_SCALAR_TYPES = (str, int, float, bool, type(None))
+
+
 def _parse_filter(filter_str: str) -> tuple[dict | None, str | None]:
     """
     Parse a filter string produced by the LLM into a normalized filter dict.
 
     Uses ast.literal_eval (safe — evaluates only Python literals) then validates
-    the shape before normalizing.
+    shape and operator names before normalizing.
 
     Returns (filter_dict, None) on success or (None, error_message) on failure.
     """
     try:
         value = ast.literal_eval(filter_str.strip())
     except (ValueError, SyntaxError) as exc:
-        return None, f"filter parse error: {exc}"
+        return None, (
+            f"Invalid filter — could not parse: {exc}. "
+            'Expected a dict like {"field": "value"} or {"field": {"==": "value"}}.'
+        )
 
     if not isinstance(value, dict):
         return None, f"filter must be a dict, got {type(value).__name__}"
 
-    for k in value:
+    for k, v in value.items():
         if not isinstance(k, str):
-            return None, f"filter keys must be strings, got {type(k).__name__}"
+            return None, f"filter keys must be strings, got {type(k).__name__!r}"
+        if isinstance(v, dict):
+            for op, operand in v.items():
+                if op not in _VALID_OPERATORS:
+                    return None, (
+                        f"Unknown filter operator {op!r} for field {k!r}. "
+                        f"Valid operators: {sorted(_VALID_OPERATORS)}"
+                    )
+                if op in ("in", "not_in") and not isinstance(operand, list):
+                    return None, f"Operator {op!r} requires a list value, got {type(operand).__name__}"
+        elif not isinstance(v, _SCALAR_TYPES):
+            return None, (
+                f"filter value for {k!r} must be a scalar or operator dict, "
+                f"got {type(v).__name__}"
+            )
 
     return _normalize_filter(value), None
 
@@ -125,7 +151,13 @@ class ReActAgent:
         self._alias_map: dict[str, str] = {}
         if self._multi:
             for key in self._searchers:
-                self._alias_map[_sanitize_alias(key)] = key  # type: ignore[arg-type]
+                sanitized = _sanitize_alias(key)  # type: ignore[arg-type]
+                if sanitized in self._alias_map:
+                    raise ValueError(
+                        f"Alias collision: {key!r} and {self._alias_map[sanitized]!r} "
+                        f"both sanitize to {sanitized!r}. Use distinct aliases."
+                    )
+                self._alias_map[sanitized] = key  # type: ignore[arg-type]
 
         if llm is None:
             self.llm = get_llm(llm_config)
@@ -307,9 +339,11 @@ class ReActAgent:
             query = m_bare.group(1)
             tool_key = "leann_search"
 
-        # Stage 2: try to extract filter= text from what follows the query
+        # Stage 2: try to extract filter= text from what follows the query.
+        # Capture anything after filter= (not just {…}) so unparseable filters
+        # reach _parse_filter and produce an error observation rather than being silently dropped.
         after_query = action_part[m_bare.end():]
-        filter_match = re.search(r'filter\s*=\s*(\{.*)', after_query, re.DOTALL)
+        filter_match = re.search(r'filter\s*=\s*(.+)', after_query, re.DOTALL)
         if filter_match:
             raw_filter = filter_match.group(1).strip()
             # Strip trailing ) that closes the tool call
