@@ -7,9 +7,11 @@ operators for different data types including numbers, strings, booleans, and lis
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional, Union
 
 logger = logging.getLogger(__name__)
+_warned_naive_datetime = False
 
 # Type alias for filter specifications
 FilterValue = Union[str, int, float, bool, list]
@@ -206,6 +208,34 @@ class MetadataFilterEngine:
         return not bool(field_value)
 
     # Helper methods
+    def _try_parse_datetime(self, value: Any) -> datetime | None:
+        """
+        Try to parse a value as an ISO 8601 datetime.
+
+        Naive datetimes are treated as UTC for backward compatibility with
+        older metadata producers, but logged once so readers can be fixed.
+        """
+        if not isinstance(value, str):
+            return None
+
+        normalized_value = value
+        if normalized_value.endswith("Z"):
+            normalized_value = normalized_value[:-1] + "+00:00"
+
+        try:
+            parsed = datetime.fromisoformat(normalized_value)
+        except ValueError:
+            return None
+
+        global _warned_naive_datetime
+        if parsed.tzinfo is None:
+            if not _warned_naive_datetime:
+                logger.warning("Naive datetime metadata encountered; treating as UTC")
+                _warned_naive_datetime = True
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        return parsed.astimezone(timezone.utc)
+
     def _numeric_compare(self, field_value: Any, expected_value: Any, compare_func) -> bool:
         """
         Helper for numeric comparisons with type coercion.
@@ -219,6 +249,27 @@ class MetadataFilterEngine:
             Result of comparison
         """
         try:
+            field_datetime = self._try_parse_datetime(field_value)
+            expected_datetime = self._try_parse_datetime(expected_value)
+            if field_datetime is not None and expected_datetime is not None:
+                return compare_func(field_datetime, expected_datetime)
+
+            if field_datetime is not None or expected_datetime is not None:
+                try:
+                    field_num = (
+                        float(field_value)
+                        if not isinstance(field_value, (int, float))
+                        else field_value
+                    )
+                    expected_num = (
+                        float(expected_value)
+                        if not isinstance(expected_value, (int, float))
+                        else expected_value
+                    )
+                except (ValueError, TypeError):
+                    return False
+                return compare_func(field_num, expected_num)
+
             # Try to convert both values to numbers for comparison
             if isinstance(field_value, str) and isinstance(expected_value, str):
                 # String comparison if both are strings
