@@ -28,3 +28,4 @@ To be captured by atom 4's `scripts/eval_temporal.py --baseline` once it exists.
 
 Atom 1: b094448 — Datetime-aware metadata comparisons parse ISO strings; dedicated 10-case test and Wave 1 metadata filter slice pass.
 Atom 2: 1792173 — `_build_index_from_documents` stamps recent UTC `indexed_at` metadata on every indexed chunk; dedicated index/search test and Wave 1 slice pass.
+Atom 3: 20f47b4 — Calendar chunks now emit UTC ISO `event_time`, `event_time_local`, `source_type=calendar`, and stable `source_id`; mocked SQLite unit test passes.
