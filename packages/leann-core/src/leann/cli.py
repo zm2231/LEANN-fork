@@ -3015,21 +3015,47 @@ Examples:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT summary, description, location,
-                       datetime(start_date + 978307200, 'unixepoch', 'localtime') as start,
-                       datetime(end_date + 978307200, 'unixepoch', 'localtime') as end_time
+                SELECT rowid as event_id, summary, description, location,
+                       datetime(start_date + 978307200, 'unixepoch') as event_time,
+                       datetime(start_date + 978307200, 'unixepoch', 'localtime') as event_time_local,
+                       datetime(end_date + 978307200, 'unixepoch', 'localtime') as end_time_local
                 FROM CI_EVENT ORDER BY start_date DESC LIMIT ?
                 """,
                 (args.max_count,),
             )
-            for summary, description, location, start, end_time in cursor.fetchall():
+            for (
+                event_id,
+                summary,
+                description,
+                location,
+                event_time,
+                event_time_local,
+                end_time_local,
+            ) in cursor.fetchall():
                 if not summary:
                     continue
+                event_time_iso = (
+                    datetime.fromisoformat(event_time).replace(tzinfo=timezone.utc).isoformat()
+                )
+                event_time_local_iso = (
+                    datetime.fromisoformat(event_time_local).astimezone().isoformat()
+                )
                 text = (
-                    f"Event: {summary}\nStart: {start}\nEnd: {end_time}\n"
+                    f"Event: {summary}\nStart: {event_time_local_iso}\nEnd: {end_time_local}\n"
                     f"Location: {location or ''}\nDescription: {description or ''}"
                 )
-                docs.append(Document(text=text, metadata={"event": summary, "start": start}))
+                docs.append(
+                    Document(
+                        text=text,
+                        metadata={
+                            "event": summary,
+                            "source_type": "calendar",
+                            "source_id": str(event_id),
+                            "event_time": event_time_iso,
+                            "event_time_local": event_time_local_iso,
+                        },
+                    )
+                )
             conn.close()
         except Exception as e:
             print(f"Error reading Apple Calendar: {e}")
