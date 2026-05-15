@@ -9,6 +9,7 @@ import pickle
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -2951,13 +2952,15 @@ Examples:
             is_recompute=is_recompute,
         )
 
+        indexed_at = datetime.now(timezone.utc).isoformat()
+
         for doc in documents:
             if hasattr(doc, "text"):
-                builder.add_text(
-                    doc.text, metadata=doc.metadata if hasattr(doc, "metadata") else {}
-                )
+                metadata = doc.metadata if hasattr(doc, "metadata") else {}
+                builder.add_text(doc.text, metadata={**metadata, "indexed_at": indexed_at})
             elif isinstance(doc, dict):
-                builder.add_text(doc["text"], metadata=doc.get("metadata", {}))
+                metadata = doc.get("metadata", {})
+                builder.add_text(doc["text"], metadata={**metadata, "indexed_at": indexed_at})
 
         builder.build_index(index_path)
         self.register_project_dir()
