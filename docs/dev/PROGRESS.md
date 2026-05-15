@@ -27,3 +27,4 @@ No code changes to LEANN itself yet — that's the /loop session's job.
 To be captured by atom 4's `scripts/eval_temporal.py --baseline` once it exists. Expected to be near-zero recall on temporal queries because current LEANN has no NL time parsing and the calendar reader is the only source emitting structured timestamps.
 
 Atom 1: b094448 — Datetime-aware metadata comparisons parse ISO strings; dedicated 10-case test and Wave 1 metadata filter slice pass.
+Atom 2: 1792173 — `_build_index_from_documents` stamps recent UTC `indexed_at` metadata on every indexed chunk; dedicated index/search test and Wave 1 slice pass.
