@@ -22,14 +22,34 @@
 
 ---
 
-## Test corpus (already decided)
+## Test corpus
 
-Two source_types, both local, built once at the start of Wave 1:
+Four source_types, all local, embedded via `BAAI/bge-m3` through iq. Pre-staged data lives at `/Users/zain/Documents/leann-eval-data/`. Index data lives under `.leann/indexes/` (gitignored).
 
-1. **Documents** — `/Users/zain/Documents/jay-abraham-eval/Jay-Abraham-Curated` (14 docx/pdf). Index name: `eval-docs`. `source_type=document`, `event_time` from filesystem `creation_date`/`last_modified_date`.
-2. **Commits** — git log of the LEANN repo itself (`git log --all` over the last 3 years). Index name: `eval-commits`. `source_type=git_commit`, `event_time` from committer date (UTC), `author` from `git log --pretty`, `mentioned_refs` from `#NNN` regex.
+| Source | source_type | Volume | Where | event_time source |
+|---|---|---|---|---|
+| Jay Abraham docs (PDF/DOCX) | `document` | 14 files | `/Users/zain/Documents/jay-abraham-eval/Jay-Abraham-Curated` | filesystem `creation_date`/`last_modified_date` via LlamaIndex |
+| LEANN git log | `git_commit` | ~600 commits since 2025-06 | this repo, `git log --all --no-merges --since=2025-06-01` | `%aI` (committer date, already ISO with offset → convert to UTC) |
+| Slack messages | `slack` | 13,062 msgs, 2025-09-12 → 2026-05-13 | `/Users/zain/Documents/leann-eval-data/slacrawl.db`, `messages` table | `CAST(ts AS REAL)` → UTC datetime |
+| Channel daily summaries | `daily_summary` | 1,186 MD files across 49 channels | `/Users/zain/Documents/leann-eval-data/notion/<channel>/<YYYY-MM-DD>.md` | filename date at 00:00:00 UTC |
 
-A new script `scripts/build_eval_corpus.py` builds both indexes. Re-runnable; idempotent on existing indexes via `--force` flag.
+**Filtering rules for slack:**
+- `WHERE ts NOT LIKE 'draft:%'` — drops drafts (their `ts` column is not a unix epoch)
+- `WHERE deleted_ts IS NULL OR deleted_ts = ''` — drops tombstoned messages
+- One chunk per message; group by `thread_ts` for `parent_ref`
+- Resolve `channel_id` → channel name via `channels` table; emit as `parent_ref="channel:<name>"`
+- Emit `author=user_id` (raw Slack ID, stable), `activity_type="authored"`, `participant_ids=[user_id]` (channel-member resolution out of scope; one-element list is correct per SIGNALS.md)
+- Extract `mentioned_urls` via `<https?://[^>|]+` regex and `mentioned_refs` via `#\w+` and `<@U\w+>` patterns
+
+**Filtering rules for daily_summary:**
+- Skip files whose filename doesn't match `YYYY-MM-DD.md`
+- `event_time` = date at `00:00:00+00:00` (no intraday signal in summary files)
+- `event_time_local` omitted (no timezone signal available)
+- `author` = `null` (multi-author summaries; consumer can derive from participant_ids if extracted later)
+- `parent_ref="channel:<folder_name>"`
+- Extract `mentioned_urls` and `mentioned_refs` same as slack
+
+`scripts/build_eval_corpus.py` orchestrates all four sources. Re-runnable; `--force` rebuilds all, no flag rebuilds only what's missing/stale.
 
 ---
 
@@ -89,16 +109,33 @@ All pass: `.venv/bin/pytest tests/test_metadata_filter_datetime.py -v`.
 
 ### Atom 4 — Eval harness scaffolding
 
-**What:** `scripts/build_eval_corpus.py` + `tests/eval/temporal_gold.jsonl` + `scripts/eval_temporal.py`.
+**What:** `scripts/build_eval_corpus.py` + expanded `tests/eval/temporal_gold.jsonl` + `scripts/eval_temporal.py`.
 
 **Where:**
-- `scripts/build_eval_corpus.py` — builds `eval-docs` index from jay-abraham-eval and `eval-commits` index from `git log --all --pretty=format:'%H|%aI|%an|%s%n%b' --no-merges` of the LEANN repo (last 3 years). Stamps full SIGNALS.md schema on each chunk.
-- `tests/eval/temporal_gold.jsonl` — 15 hand-written queries. Each row: `{query, expected_event_time_range: [iso, iso], expected_source_types: [...], expected_min_results: int}`.
-- `scripts/eval_temporal.py` — runs each gold query against both indexes (baseline = no temporal handling, treatment = with temporal pre-processing once atoms 5-6 land). Prints precision@5, recall@5, mean reciprocal rank.
+- `scripts/build_eval_corpus.py` — builds 4 LEANN indexes from the test corpus described in the "Test corpus" section above. Each index uses bge-m3 via iq. Each chunk stamped with the full SIGNALS.md schema (atom 2's `indexed_at` handles the `indexed_at` field automatically). Index names: `eval-docs`, `eval-commits`, `eval-slack`, `eval-summaries`. Sub-functions: `ingest_docs()`, `ingest_commits()`, `ingest_slack()`, `ingest_summaries()` — keep each ≤80 lines.
+- `tests/eval/temporal_gold.jsonl` — expand from 7 starter queries to 20+. Cross-source queries mandatory (e.g., "what did the team discuss about LEANN in early February" — should pull both git_commit and slack/summary). Each row: `{query, now, expected_event_time_range: [iso, iso] | null, expected_source_types: [...], expected_min_results: int, expected_text_contains: [...]}`.
+- `scripts/eval_temporal.py` — runs each gold query against ALL 4 indexes, merges by score, computes precision@5 / recall@5 / MRR per query and aggregate. Two modes: `--baseline` (no temporal pre-processing, raw query → search → post-filter against `expected_event_time_range`) and `--treatment` (uses `enable_temporal=True` once atom 6 lands).
 
-**Done test:** `python scripts/build_eval_corpus.py` produces two indexes; `python scripts/eval_temporal.py --baseline` prints a table. Both indexes searchable. Baseline numbers recorded in `docs/dev/PROGRESS.md`.
+**iq routing for embeddings:**
+```python
+LeannBuilder(
+    backend_name="hnsw",
+    embedding_model="BAAI/bge-m3",
+    embedding_mode="openai",
+    embedding_options={
+        "base_url": "http://localhost:8100/v1",
+        "api_key": "iq-local",  # non-empty placeholder; iq doesn't check
+    },
+    is_recompute=False,
+)
+```
 
-**Commit:** `test(eval): temporal eval corpus + gold set + harness scaffold`
+**Done test:**
+1. `pkill -f hnsw_embedding_server; .venv/bin/python scripts/build_eval_corpus.py` — produces 4 indexes under `.leann/indexes/`. Build completes; warm up tolerates infinity_manager's on-demand model load (first request may take 30-60s).
+2. `.venv/bin/python scripts/eval_temporal.py --baseline` — prints a table with one row per gold query and an aggregate row. Baseline numbers recorded in `docs/dev/PROGRESS.md` under "Atom 4 baseline."
+3. Sanity check: at least one query of each `expected_source_types` returns ≥`expected_min_results` results.
+
+**Commit:** `test(eval): temporal eval corpus (4 sources via iq bge-m3) + gold set + harness`
 
 ---
 
