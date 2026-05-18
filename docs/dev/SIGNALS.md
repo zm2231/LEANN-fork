@@ -65,6 +65,21 @@
 
 ---
 
+## Document hierarchy (Wave 2 additions)
+
+| Field | Type | Required | Example | Notes |
+|---|---|---|---|---|
+| `source_document_id` | string | recommended | `"sha256-abc123"`, `"hearing_2025_05_20_sfrc_budget"` | Stable identifier for the source document this chunk came from. Multiple chunks from the same PDF, video, or hearing transcript share one `source_document_id`. Drives `diversify_by` and `context_window`. |
+| `chunk_seq` | integer | recommended when `source_document_id` is set | `0`, `1`, `2` | Ordering within `source_document_id`. Use sequential integers from 0; gaps are allowed. |
+| `event_id` | string | optional | `"hearing_2025_05_20_sfrc_budget"` | Cross-source event identifier. A hearing video, transcript, and press release can share this. Reserved for connector-layer use. |
+| `source_url` | string | optional | `"https://example.com/hearing"` | Deep link back to the original source. Repeated here as part of the citation/provenance group. |
+| `event_date` | ISO 8601 date or datetime string | optional | `"2025-05-20"` | Human-facing event date when a full `event_time` is not available or when date-level grouping is useful. |
+| `speaker` | string | optional | `"Sen. Rubio"` | Speaker or named person responsible for the quoted span, when available. |
+| `public_citation_allowed` | boolean | optional | `true` | Whether the app layer may show this chunk as a public citation. |
+| `review_required` | boolean | optional | `false` | Whether the app layer should require human review before publishing or citing this chunk. |
+
+---
+
 ## What this schema is NOT
 
 - **Not a knowledge graph.** Edges between chunks live in a sidecar (Wave 6+), not in chunk metadata. Don't add `linked_to: [chunk_id, ...]` fields.
