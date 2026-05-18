@@ -31,8 +31,15 @@ Atom 4 baseline (`.venv/bin/python scripts/eval_temporal.py --baseline`):
 | aggregate | precision@5 | recall@5 | mrr |
 |---|---:|---:|---:|
 | baseline | 0.08 | 0.23 | 0.20 |
+| treatment (enable_temporal=True) | 0.25 | 0.68 | 0.51 |
+| delta | +0.17 | +0.45 | +0.31 |
 
-Known pre-existing issues excluded from Wave 1 final regression: DiskANN spawn-mode pickle bug on macOS (`packages/leann-backend-diskann`, unrelated to temporal work), and OpenClaw local model/subprocess tests on this machine.
+Acceptance bar (TEMPORAL-PLAN.md atom 9): recall@5 ≥ +30pp, precision change ≥ -5pp. Met with substantial headroom: +45pp recall, +17pp precision (no regression), MRR ~2.5×.
+
+Known pre-existing issues excluded from Wave 1 final regression:
+- DiskANN test surface (`tests/test_diskann_partition.py`, `tests/test_ci_minimal.py`, `[diskann]` parametrizations in `tests/test_basic.py` and `tests/test_incremental_build.py`): DiskANN backend uninstalled on this machine after spawn-mode pickle bug (`packages/leann-backend-diskann/leann_backend_diskann/diskann_backend.py` — `DiskannBuilder.build()` passes a nested local function `_run_build` to `multiprocessing.Process`, unpicklable under macOS spawn). Unrelated to temporal work; tracked separately for post-Wave-1 fix.
+- OpenClaw E2E (`tests/openclaw/`): pre-existing slow subprocess integration tests requiring the OpenClaw CLI.
+- `tests/test_document_rag.py::test_document_rag_simulated`: pytest hangs in subprocess poll after `apps/document_rag.py` exits, with an orphaned `hnsw_embedding_server` attached to the temp index. Pre-existing fixture-teardown issue, unrelated to temporal work.
 
 Atom 1: b094448 — Datetime-aware metadata comparisons parse ISO strings; dedicated 10-case test and Wave 1 metadata filter slice pass.
 Atom 2: 1792173 — `_build_index_from_documents` stamps recent UTC `indexed_at` metadata on every indexed chunk; dedicated index/search test and Wave 1 slice pass.
@@ -42,3 +49,5 @@ Atom 5: eb986b0 — Added `leann.temporal.parse_temporal_query` with dateparser-
 Atom 6: b42b12b — `LeannSearcher.search(..., enable_temporal=True)` parses NL time windows, merges metadata filters with caller precedence, overscans ANN candidates, and embeds the stripped semantic query.
 Atom 7: fc13544 — ReAct local search now forwards `metadata_filters` and `enable_temporal`, with prompt coverage for natural-language time expressions.
 Atom 8: c80036f — Added SIGNALS schema regression coverage for document, git_commit, and calendar metadata, including UTC temporal fields, indexed_at, activity_type, and participants.
+
+Atom 9: <pending> — Wave 1 close-out; final regression with documented exclusions; eval table above.
