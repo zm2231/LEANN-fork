@@ -50,4 +50,18 @@ Atom 6: b42b12b — `LeannSearcher.search(..., enable_temporal=True)` parses NL 
 Atom 7: fc13544 — ReAct local search now forwards `metadata_filters` and `enable_temporal`, with prompt coverage for natural-language time expressions.
 Atom 8: c80036f — Added SIGNALS schema regression coverage for document, git_commit, and calendar metadata, including UTC temporal fields, indexed_at, activity_type, and participants.
 
-Atom 9: <pending> — Wave 1 close-out; final regression with documented exclusions; eval table above.
+Atom 9: 114dee1 — Wave 1 close-out. Final regression: 288 passed, 14 skipped, 6 deselected, 0 failed (159s). Exclusions: `tests/openclaw` (needs CLI), `tests/test_document_rag.py` + `tests/test_astchunk_integration.py` (pre-existing subprocess fixture hangs), `tests/test_diskann_partition.py` + `-k "not diskann"` + `test_readme_examples.py::test_backend_options` (DiskANN native SIGSEGV on test fixtures with <256 vectors; pre-existing).
+
+## 2026-05-18: Wave 1 done
+
+Branch `feat/temporal-substrate` at 21 commits ahead of `origin/main`:
+- 9 atoms with feat/fix/test commits
+- 9 docs(dev) per-atom progress entries
+- 1 fix(temporal) tuning commit (extended NL parsers + backfill scan) — pushed eval over acceptance bar
+- 1 chore(server) + 1 chore(tests) precursor commits (ruff 0.15 nits)
+- 1 fix(diskann) pickle bug fix (hoisted `_run_build` to module scope for spawn-mode pickling)
+
+Eval: P@5 0.25 / R@5 0.68 / MRR 0.51 vs baseline 0.08 / 0.23 / 0.20.
+Acceptance bar (R@5 ≥ +30pp, P@5 change ≥ -5pp): met with +45pp recall, +17pp precision, MRR ×2.5.
+
+Wave 1 substrate available for downstream branches to depend on or cherry-pick from. Next planned work (see `docs/dev/NEXT-WAVES.md`): `feat/sparse-prefilter` (independent branch, unblocks sparse-metadata retrieval), `feat/diversify-context` (independent branch, group-by + sibling chunks).
