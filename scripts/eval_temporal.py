@@ -85,7 +85,7 @@ def open_searchers() -> dict[str, LeannSearcher]:
 
 def search_all(
     searchers: dict[str, LeannSearcher],
-    query: str,
+    row: dict[str, Any],
     mode: str,
     top_k_per_index: int,
 ) -> list[SearchResult]:
@@ -94,8 +94,29 @@ def search_all(
         kwargs: dict[str, Any] = {"top_k": top_k_per_index}
         if mode == "treatment":
             kwargs["enable_temporal"] = True
-        merged.extend(searcher.search(query, **kwargs))
+            if row.get("now"):
+                kwargs["temporal_now"] = parse_dt(row["now"])
+        merged.extend(searcher.search(row["query"], **kwargs))
     return sorted(merged, key=lambda result: result.score, reverse=True)
+
+
+def search_all_rank_normalized(
+    searchers: dict[str, LeannSearcher],
+    row: dict[str, Any],
+    mode: str,
+    top_k_per_index: int,
+) -> list[SearchResult]:
+    ranked: list[tuple[float, SearchResult]] = []
+    for searcher in searchers.values():
+        kwargs: dict[str, Any] = {"top_k": top_k_per_index}
+        if mode == "treatment":
+            kwargs["enable_temporal"] = True
+            if row.get("now"):
+                kwargs["temporal_now"] = parse_dt(row["now"])
+        results = searcher.search(row["query"], **kwargs)
+        for rank, result in enumerate(results, start=1):
+            ranked.append((1.0 / rank + result.score * 1e-6, result))
+    return [result for _, result in sorted(ranked, key=lambda item: item[0], reverse=True)]
 
 
 def evaluate_row(
@@ -157,9 +178,8 @@ def main() -> None:
     gold = load_gold()
     searchers = open_searchers()
     try:
-        results_by_row = [
-            search_all(searchers, row["query"], run_mode, args.top_k_per_index) for row in gold
-        ]
+        search_fn = search_all_rank_normalized if run_mode == "treatment" else search_all
+        results_by_row = [search_fn(searchers, row, run_mode, args.top_k_per_index) for row in gold]
         eval_rows = [evaluate_row(row, results) for row, results in zip(gold, results_by_row)]
     finally:
         for searcher in searchers.values():

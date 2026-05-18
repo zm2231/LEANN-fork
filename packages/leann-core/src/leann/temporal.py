@@ -19,6 +19,20 @@ _WEEKDAY_RE = re.compile(
 )
 _LAST_PERIOD_RE = re.compile(r"\blast\s+(?P<period>week|month|year)\b", re.IGNORECASE)
 _THIS_PERIOD_RE = re.compile(r"\bthis\s+(?P<period>week|month|year)\b", re.IGNORECASE)
+_AROUND_NEW_YEAR_RE = re.compile(r"\baround\s+new\s+year\b", re.IGNORECASE)
+_EARLY_MONTH_RE = re.compile(
+    r"\b(?:in\s+)?early\s+(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE,
+)
+_FIRST_WEEK_MONTH_RE = re.compile(
+    r"\bthe\s+first\s+week\s+of\s+(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE,
+)
+_HOLIDAYS_RE = re.compile(r"\b(?:around\s+the\s+)?holidays\b", re.IGNORECASE)
+_AROUND_DATE_RE = re.compile(
+    r"\baround\s+(?P<date>[A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b",
+    re.IGNORECASE,
+)
 _BETWEEN_RE = re.compile(
     r"\bbetween\s+(?P<start>.+?)\s+and\s+(?P<end>[A-Za-z0-9,\-/ ]+)\b",
     re.IGNORECASE,
@@ -56,6 +70,11 @@ def parse_temporal_query(
         _parse_weekday,
         _parse_last_period,
         _parse_this_period,
+        _parse_around_new_year,
+        _parse_early_month,
+        _parse_first_week_of_month,
+        _parse_holidays,
+        _parse_around_date,
         _parse_since_year,
         _parse_in_month,
         _parse_on_date,
@@ -123,11 +142,68 @@ def _parse_this_period(query: str, now: datetime) -> tuple[Match[str], datetime,
     period = match.group("period").lower()
     if period == "week":
         start = _day_start((now - timedelta(days=now.weekday())).date())
+        end = _day_end(now.date())
     elif period == "month":
         start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        end = _shift_months(start, 1) - timedelta(microseconds=1)
     else:
         start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
-    return match, start, now
+        end = _day_end(now.date())
+    return match, start, end
+
+
+def _parse_around_new_year(
+    query: str, now: datetime
+) -> tuple[Match[str], datetime, datetime] | None:
+    match = _AROUND_NEW_YEAR_RE.search(query)
+    if not match:
+        return None
+    start = datetime(now.year - 1, 12, 28, tzinfo=timezone.utc)
+    end = datetime(now.year, 1, 5, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return match, start, end
+
+
+def _parse_early_month(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _EARLY_MONTH_RE.search(query)
+    if not match:
+        return None
+    month = _MONTHS[match.group("month").lower()]
+    start = datetime(now.year, month, 1, tzinfo=timezone.utc)
+    end = datetime(now.year, month, 15, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return match, start, end
+
+
+def _parse_first_week_of_month(
+    query: str, now: datetime
+) -> tuple[Match[str], datetime, datetime] | None:
+    match = _FIRST_WEEK_MONTH_RE.search(query)
+    if not match:
+        return None
+    month = _MONTHS[match.group("month").lower()]
+    start = datetime(now.year, month, 1, tzinfo=timezone.utc)
+    end = datetime(now.year, month, 7, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return match, start, end
+
+
+def _parse_holidays(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _HOLIDAYS_RE.search(query)
+    if not match:
+        return None
+    start = datetime(now.year - 1, 12, 20, tzinfo=timezone.utc)
+    end = datetime(now.year, 1, 5, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return match, start, end
+
+
+def _parse_around_date(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _AROUND_DATE_RE.search(query)
+    if not match:
+        return None
+    parsed = _parse_date(match.group("date"), now)
+    if parsed is None:
+        return None
+    start = parsed - timedelta(days=5)
+    end = parsed + timedelta(days=1)
+    return match, _day_start(start.date()), _day_end(end.date())
 
 
 def _parse_between(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:

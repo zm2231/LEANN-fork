@@ -109,3 +109,48 @@ def test_stripped_query_keeps_semantic_content():
     stripped, filters = parse_temporal_query("what was I working on last Tuesday", NOW)
     assert stripped == "what was I working on"
     assert filters is not None
+
+
+def test_around_new_year():
+    assert_range(
+        "BTD landing page discussion around new year",
+        "BTD landing page discussion",
+        "2025-12-28T00:00:00+00:00",
+        "2026-01-05T23:59:59.999999+00:00",
+    )
+
+
+def test_early_month():
+    assert_range(
+        "Tam comments on task triage in early January",
+        "Tam comments on task triage",
+        "2026-01-01T00:00:00+00:00",
+        "2026-01-15T23:59:59.999999+00:00",
+    )
+
+
+def test_first_week_of_month():
+    assert_range(
+        "what was happening in big-brain channel the first week of January",
+        "what was happening in big-brain channel",
+        "2026-01-01T00:00:00+00:00",
+        "2026-01-07T23:59:59.999999+00:00",
+    )
+
+
+def test_holidays():
+    assert_range(
+        "Max activities around the holidays",
+        "Max activities",
+        "2025-12-20T00:00:00+00:00",
+        "2026-01-05T23:59:59.999999+00:00",
+    )
+
+
+def test_around_date():
+    assert_range(
+        "Beware the Defaults newsletter overdue around January 6",
+        "Beware the Defaults newsletter overdue",
+        "2026-01-01T00:00:00+00:00",
+        "2026-01-07T23:59:59.999999+00:00",
+    )
