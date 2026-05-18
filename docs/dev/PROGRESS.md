@@ -38,3 +38,4 @@ Atom 1: b094448 — Datetime-aware metadata comparisons parse ISO strings; dedic
 Atom 2: 1792173 — `_build_index_from_documents` stamps recent UTC `indexed_at` metadata on every indexed chunk; dedicated index/search test and Wave 1 slice pass.
 Atom 3: 20f47b4 — Calendar chunks now emit UTC ISO `event_time`, `event_time_local`, `source_type=calendar`, and stable `source_id`; mocked SQLite unit test passes.
 Atom 4: a1f785e — Built 4-source eval corpus with HNSW + iq bge-m3, expanded gold set to 22 rows, and recorded baseline P@5 0.08 / R@5 0.23 / MRR 0.20.
+Atom 5: eb986b0 — Added `leann.temporal.parse_temporal_query` with dateparser-backed NL time windows and 12 frozen-time parser tests.
