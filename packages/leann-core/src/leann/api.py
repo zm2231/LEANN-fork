@@ -1045,6 +1045,13 @@ class LeannBuilder:
             or meta_backend_kwargs.get("is_recompute")
             or self.backend_kwargs.get("is_recompute")
         )
+        if backend_name == "hnsw" and needs_recompute:
+            raise ValueError(
+                "Pruned/recompute HNSW indexes do not support safe in-place "
+                "incremental updates. Rebuild with --force or use a non-recompute "
+                "backend/index. Refusing before embedding to avoid partial passage "
+                "append if native FAISS/HNSW add aborts."
+            )
 
         valid_chunks: list[dict[str, Any]] = []
         for chunk in self.chunks:
@@ -1292,6 +1299,14 @@ class LeannSearcher:
         daemon_ttl_seconds: int = 900,
         **backend_kwargs,
     ):
+        # Support project-local named indexes such as LeannSearcher("my-index")
+        # by resolving them to .leann/indexes/<name>/documents.leann when present.
+        raw_index_path = Path(index_path)
+        if not raw_index_path.is_absolute() and len(raw_index_path.parts) == 1:
+            local_index = Path.cwd() / ".leann" / "indexes" / index_path / "documents.leann"
+            if local_index.with_suffix(".leann.meta.json").exists() or Path(f"{local_index}.meta.json").exists():
+                index_path = str(local_index)
+
         # Fix path resolution for Colab and other environments
         if not Path(index_path).is_absolute():
             index_path = str(Path(index_path).resolve())

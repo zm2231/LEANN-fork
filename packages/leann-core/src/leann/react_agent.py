@@ -216,6 +216,9 @@ class ReActAgent:
         filter_note = (
             f'\nAll local tools accept an optional filter: {_filter_tool}("q", filter={{"field": "value"}}) '
             f'or {_filter_tool}("q", filter={{"field": {{"contains": "x"}}}}).'
+            "\nLocal search also understands natural-language time expressions in the query "
+            'such as "last week", "yesterday", "around new year", or "since January" — '
+            "these are parsed into event_time filters automatically."
         )
 
         if self.web_search_available:
@@ -414,7 +417,18 @@ class ReActAgent:
 
     # ── Main loop ────────────────────────────────────────────────────
 
-    def run(self, question: str, top_k: int = 5) -> str:
+    def run(
+        self,
+        question: str,
+        top_k: int = 5,
+        metadata_filters: dict | None = None,
+        enable_temporal: bool = False,
+    ) -> str:
+        """Run the ReAct loop. Caller can pass `metadata_filters` to be merged
+        into every local-search call (in addition to any LLM-parsed `filter=`
+        kwargs from tool syntax), and toggle `enable_temporal=True` to enable
+        NL time-window parsing on the LeannSearcher side. Default False
+        preserves backward-compatible single-searcher behavior."""
         logger.info(f"Starting ReAct agent: {question!r}")
         self.search_history = []
         previous_observations: list[str] = []
@@ -481,7 +495,7 @@ class ReActAgent:
                 tool_key = parts[0]  # e.g. "leann_search" or "search_raw_sources"
                 rest = parts[1] if len(parts) > 1 else ""
 
-                metadata_filters: dict | None = None
+                tool_filters: dict | None = None
                 if "\x00" in rest:
                     query_str, filter_str = rest.split("\x00", 1)
                     parsed, err = _parse_filter(filter_str)
@@ -495,9 +509,21 @@ class ReActAgent:
                         previous_observations.append(observation)
                         all_context.append(f"Action: {action}\n{observation}")
                         continue
-                    metadata_filters = parsed
+                    tool_filters = parsed
                 else:
                     query_str = rest
+
+                # Merge run-level metadata_filters (from .run() kwarg) with
+                # tool-level filters from LLM-parsed `filter=` clause.
+                # Run-level filters take precedence on key conflict.
+                merged_filters: dict | None
+                if metadata_filters and tool_filters:
+                    merged_filters = dict(tool_filters)
+                    merged_filters.update(metadata_filters)
+                elif metadata_filters:
+                    merged_filters = metadata_filters
+                else:
+                    merged_filters = tool_filters
 
                 # Resolve corpus alias
                 if self._multi and tool_key.startswith("search_"):
@@ -505,13 +531,14 @@ class ReActAgent:
                 else:
                     corpus_name = None
 
-                results = self.search(
-                    query_str,
-                    top_k=top_k,
-                    corpus=corpus_name,
-                    metadata_filters=metadata_filters,
-                    enable_temporal=True,
-                )
+                search_kwargs: dict[str, Any] = {
+                    "top_k": top_k,
+                    "corpus": corpus_name,
+                    "metadata_filters": merged_filters,
+                }
+                if enable_temporal:
+                    search_kwargs["enable_temporal"] = True
+                results = self.search(query_str, **search_kwargs)
                 results_count = len(results)
                 label = corpus_name if corpus_name else None
                 observation = self._format_search_results(results, corpus_label=label)
