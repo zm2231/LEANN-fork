@@ -27,6 +27,7 @@ from .embedding_server_manager import EmbeddingServerManager
 from .interface import LeannBackendFactoryInterface
 from .metadata_filter import MetadataFilterEngine
 from .registry import BACKEND_REGISTRY
+from .temporal import parse_temporal_query
 
 logger = logging.getLogger(__name__)
 
@@ -1167,6 +1168,8 @@ class LeannSearcher:
         use_grep: bool = False,
         gemma: float = 1.0,
         provider_options: Optional[dict[str, Any]] = None,
+        enable_temporal: bool = False,
+        temporal_overscan: int = 10,
         **kwargs,
     ) -> list[SearchResult]:
         """
@@ -1190,6 +1193,9 @@ class LeannSearcher:
                 - String: "contains", "starts_with", "ends_with"
                 Example: {"chapter": {"<=": 5}, "tags": {"in": ["fiction", "drama"]}}
             gemma: Weight of vector search results in hybrid search (0.0-1.0), 1 = pure vector search, 0 = pure keyword search
+            enable_temporal: When true, parse natural-language time expressions from the query
+                into metadata filters and embed the stripped semantic query.
+            temporal_overscan: Candidate multiplier used when temporal parsing adds filters.
             **kwargs: Backend-specific parameters
 
         Returns:
@@ -1204,6 +1210,21 @@ class LeannSearcher:
         logger.info(f"  Top_k: {top_k}")
         logger.info(f"  Metadata filters: {metadata_filters}")
         logger.info(f"  Additional kwargs: {kwargs}")
+
+        requested_top_k = top_k
+        if enable_temporal:
+            stripped_query, temporal_filters = parse_temporal_query(query)
+            if temporal_filters:
+                query = stripped_query
+                merged_filters = dict(temporal_filters)
+                if metadata_filters:
+                    merged_filters.update(metadata_filters)
+                metadata_filters = merged_filters
+                temporal_overscan = max(int(temporal_overscan), 1)
+                top_k *= temporal_overscan
+                logger.info(f"  Temporal query stripped to: '{query}'")
+                logger.info(f"  Temporal filters: {temporal_filters}")
+                logger.info(f"  Temporal overscan top_k: {top_k}")
 
         # Smart top_k detection and adjustment
         # Use PassageManager length (sum of shard sizes) to avoid
@@ -1374,6 +1395,8 @@ class LeannSearcher:
             enriched_results = self.passage_manager.filter_search_results(
                 enriched_results, metadata_filters
             )
+
+        enriched_results = enriched_results[:requested_top_k]
 
         # Define color codes outside the loop for final message
         GREEN = "\033[92m"
