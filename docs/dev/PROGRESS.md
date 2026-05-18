@@ -26,6 +26,15 @@ No code changes to LEANN itself yet — that's the /loop session's job.
 
 To be captured by atom 4's `scripts/eval_temporal.py --baseline` once it exists. Expected to be near-zero recall on temporal queries because current LEANN has no NL time parsing and the calendar reader is the only source emitting structured timestamps.
 
+Atom 4 baseline (`.venv/bin/python scripts/eval_temporal.py --baseline`):
+
+| aggregate | precision@5 | recall@5 | mrr |
+|---|---:|---:|---:|
+| baseline | 0.08 | 0.23 | 0.20 |
+
+Known pre-existing issues excluded from Wave 1 final regression: DiskANN spawn-mode pickle bug on macOS (`packages/leann-backend-diskann`, unrelated to temporal work), and OpenClaw local model/subprocess tests on this machine.
+
 Atom 1: b094448 — Datetime-aware metadata comparisons parse ISO strings; dedicated 10-case test and Wave 1 metadata filter slice pass.
 Atom 2: 1792173 — `_build_index_from_documents` stamps recent UTC `indexed_at` metadata on every indexed chunk; dedicated index/search test and Wave 1 slice pass.
 Atom 3: 20f47b4 — Calendar chunks now emit UTC ISO `event_time`, `event_time_local`, `source_type=calendar`, and stable `source_id`; mocked SQLite unit test passes.
+Atom 4: a1f785e — Built 4-source eval corpus with HNSW + iq bge-m3, expanded gold set to 22 rows, and recorded baseline P@5 0.08 / R@5 0.23 / MRR 0.20.
