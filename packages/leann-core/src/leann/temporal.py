@@ -1,0 +1,223 @@
+"""Natural-language temporal query parsing."""
+
+from __future__ import annotations
+
+import calendar
+import re
+from datetime import datetime, time, timedelta, timezone
+from re import Match
+
+import dateparser
+
+_AGO_RE = re.compile(
+    r"\b(?P<count>\d+)\s+(?P<unit>hours?|days?|weeks?|months?|years?)\s+ago\b",
+    re.IGNORECASE,
+)
+_WEEKDAY_RE = re.compile(
+    r"\blast\s+(?P<weekday>monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+_LAST_PERIOD_RE = re.compile(r"\blast\s+(?P<period>week|month|year)\b", re.IGNORECASE)
+_THIS_PERIOD_RE = re.compile(r"\bthis\s+(?P<period>week|month|year)\b", re.IGNORECASE)
+_BETWEEN_RE = re.compile(
+    r"\bbetween\s+(?P<start>.+?)\s+and\s+(?P<end>[A-Za-z0-9,\-/ ]+)\b",
+    re.IGNORECASE,
+)
+_SINCE_YEAR_RE = re.compile(r"\bsince\s+(?P<year>\d{4})\b", re.IGNORECASE)
+_IN_MONTH_RE = re.compile(
+    r"\bin\s+(?P<month>january|february|march|april|may|june|july|august|september|october|november|december)\b",
+    re.IGNORECASE,
+)
+_ON_DATE_RE = re.compile(
+    r"\bon\s+(?P<date>[A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b", re.IGNORECASE
+)
+_NAMED_DAY_RE = re.compile(r"\b(?P<day>yesterday|today|tomorrow)\b", re.IGNORECASE)
+
+_WEEKDAYS = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+_MONTHS = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
+
+
+def parse_temporal_query(
+    query: str, now: datetime | None = None
+) -> tuple[str, dict[str, dict[str, str]] | None]:
+    """Strip a time expression from a query and return an event_time filter."""
+    anchor = _as_utc(now or datetime.now(timezone.utc))
+    for matcher in (
+        _parse_between,
+        _parse_ago,
+        _parse_weekday,
+        _parse_last_period,
+        _parse_this_period,
+        _parse_since_year,
+        _parse_in_month,
+        _parse_on_date,
+        _parse_named_day,
+    ):
+        parsed = matcher(query, anchor)
+        if parsed is not None:
+            match, start, end = parsed
+            return _strip_match(query, match), _filter(start, end)
+    return query, None
+
+
+def _parse_ago(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _AGO_RE.search(query)
+    if not match:
+        return None
+    count = int(match.group("count"))
+    unit = match.group("unit").lower().rstrip("s")
+    if unit == "hour":
+        start = now - timedelta(hours=count)
+    elif unit == "day":
+        start = now - timedelta(days=count)
+    elif unit == "week":
+        start = now - timedelta(weeks=count)
+    elif unit == "month":
+        start = _shift_months(now, -count)
+    else:
+        start = _shift_months(now, -12 * count)
+    return match, start, now
+
+
+def _parse_weekday(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _WEEKDAY_RE.search(query)
+    if not match:
+        return None
+    target = _WEEKDAYS[match.group("weekday").lower()]
+    days_back = (now.weekday() - target) % 7 or 7
+    day = (now - timedelta(days=days_back)).date()
+    return match, _day_start(day), _day_end(day)
+
+
+def _parse_last_period(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _LAST_PERIOD_RE.search(query)
+    if not match:
+        return None
+    period = match.group("period").lower()
+    if period == "week":
+        this_week_start = _day_start((now - timedelta(days=now.weekday())).date())
+        start = this_week_start - timedelta(days=7)
+        end = this_week_start - timedelta(microseconds=1)
+    elif period == "month":
+        month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        start = _shift_months(month_start, -1)
+        end = month_start - timedelta(microseconds=1)
+    else:
+        start = datetime(now.year - 1, 1, 1, tzinfo=timezone.utc)
+        end = datetime(now.year, 1, 1, tzinfo=timezone.utc) - timedelta(microseconds=1)
+    return match, start, end
+
+
+def _parse_this_period(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _THIS_PERIOD_RE.search(query)
+    if not match:
+        return None
+    period = match.group("period").lower()
+    if period == "week":
+        start = _day_start((now - timedelta(days=now.weekday())).date())
+    elif period == "month":
+        start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    else:
+        start = datetime(now.year, 1, 1, tzinfo=timezone.utc)
+    return match, start, now
+
+
+def _parse_between(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _BETWEEN_RE.search(query)
+    if not match:
+        return None
+    start = _parse_date(match.group("start"), now)
+    end = _parse_date(match.group("end"), now)
+    if start is None or end is None:
+        return None
+    return match, _day_start(start.date()), _day_end(end.date())
+
+
+def _parse_since_year(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _SINCE_YEAR_RE.search(query)
+    if not match:
+        return None
+    start = datetime(int(match.group("year")), 1, 1, tzinfo=timezone.utc)
+    return match, start, now
+
+
+def _parse_in_month(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _IN_MONTH_RE.search(query)
+    if not match:
+        return None
+    month = _MONTHS[match.group("month").lower()]
+    start = datetime(now.year, month, 1, tzinfo=timezone.utc)
+    end = _shift_months(start, 1) - timedelta(microseconds=1)
+    return match, start, end
+
+
+def _parse_on_date(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _ON_DATE_RE.search(query)
+    if not match:
+        return None
+    parsed = _parse_date(match.group("date"), now)
+    if parsed is None:
+        return None
+    return match, _day_start(parsed.date()), _day_end(parsed.date())
+
+
+def _parse_named_day(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
+    match = _NAMED_DAY_RE.search(query)
+    if not match:
+        return None
+    offset = {"yesterday": -1, "today": 0, "tomorrow": 1}[match.group("day").lower()]
+    day = (now + timedelta(days=offset)).date()
+    return match, _day_start(day), _day_end(day)
+
+
+def _parse_date(text: str, now: datetime) -> datetime | None:
+    parsed = dateparser.parse(
+        text,
+        settings={
+            "RELATIVE_BASE": now,
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "TIMEZONE": "UTC",
+            "TO_TIMEZONE": "UTC",
+            "PREFER_DATES_FROM": "past",
+        },
+    )
+    return None if parsed is None else _as_utc(parsed)
+
+
+def _filter(start: datetime, end: datetime) -> dict[str, dict[str, str]]:
+    return {"event_time": {">=": start.isoformat(), "<=": end.isoformat()}}
+
+
+def _strip_match(query: str, match: Match[str]) -> str:
+    stripped = f"{query[: match.start()]} {query[match.end() :]}".strip()
+    return re.sub(r"\s+", " ", stripped).strip(" ,;:-")
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _day_start(day) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=timezone.utc)
+
+
+def _day_end(day) -> datetime:
+    return datetime.combine(day, time.max, tzinfo=timezone.utc)
+
+
+def _shift_months(value: datetime, months: int) -> datetime:
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, calendar.monthrange(year, month)[1])
+    return value.replace(year=year, month=month, day=day)
