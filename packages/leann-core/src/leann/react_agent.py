@@ -78,6 +78,7 @@ class ReActAgent:
                 '3. visit_page("url"): Read the full content of a specific URL.\n'
                 "\nStrategies:\n"
                 "- Use `leann_search` for internal project details, code implementation, or private history.\n"
+                "- `leann_search` understands natural-language time expressions such as last week, yesterday, or since January.\n"
                 "- Use `web_search` for public documentation, latest news, or general concepts.\n"
                 "- Use `visit_page` if you found a relevant link but need the full details.\n"
                 "- You can combine both!"
@@ -93,6 +94,7 @@ class ReActAgent:
             tools_block = (
                 "You have access to this tool:\n"
                 '1. leann_search("query"): Search the local private knowledge base (code, docs, history).\n'
+                "`leann_search` understands natural-language time expressions such as last week, yesterday, or since January.\n"
                 "\nNote: Web search is not available (no API key configured). "
                 "Answer using only the local knowledge base."
             )
@@ -173,13 +175,30 @@ class ReActAgent:
 
         return thought, action
 
-    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        metadata_filters: dict[str, dict[str, Any]] | None = None,
+        enable_temporal: bool = False,
+    ) -> list[SearchResult]:
         """Perform a local search and return results."""
         logger.info(f"Searching: {query}")
-        results = self.searcher.search(query, top_k=top_k)
+        results = self.searcher.search(
+            query,
+            top_k=top_k,
+            metadata_filters=metadata_filters,
+            enable_temporal=enable_temporal,
+        )
         return results
 
-    def run(self, question: str, top_k: int = 5) -> str:
+    def run(
+        self,
+        question: str,
+        top_k: int = 5,
+        metadata_filters: dict[str, dict[str, Any]] | None = None,
+        enable_temporal: bool = False,
+    ) -> str:
         """
         Run the ReAct agent to answer a question.
 
@@ -261,7 +280,12 @@ class ReActAgent:
 
             else:
                 query_str = action.split(":", 1)[1] if ":" in action else action
-                results = self.search(query_str, top_k=top_k)
+                results = self.search(
+                    query_str,
+                    top_k=top_k,
+                    metadata_filters=metadata_filters,
+                    enable_temporal=enable_temporal,
+                )
                 results_count = len(results)
                 observation = self._format_search_results(results)
 
