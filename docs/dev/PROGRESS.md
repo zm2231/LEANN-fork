@@ -41,3 +41,4 @@ Atom 4: a1f785e — Built 4-source eval corpus with HNSW + iq bge-m3, expanded g
 Atom 5: eb986b0 — Added `leann.temporal.parse_temporal_query` with dateparser-backed NL time windows and 12 frozen-time parser tests.
 Atom 6: b42b12b — `LeannSearcher.search(..., enable_temporal=True)` parses NL time windows, merges metadata filters with caller precedence, overscans ANN candidates, and embeds the stripped semantic query.
 Atom 7: fc13544 — ReAct local search now forwards `metadata_filters` and `enable_temporal`, with prompt coverage for natural-language time expressions.
+Atom 8: c80036f — Added SIGNALS schema regression coverage for document, git_commit, and calendar metadata, including UTC temporal fields, indexed_at, activity_type, and participants.
