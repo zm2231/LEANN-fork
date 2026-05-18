@@ -125,6 +125,7 @@ class SearchResult:
     score: float
     text: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    siblings: Optional[list["SearchResult"]] = None
 
 
 class PassageManager:
@@ -133,6 +134,11 @@ class PassageManager:
     ):
         self.offset_maps: dict[str, dict[str, int]] = {}
         self.passage_files: dict[str, str] = {}
+        self.embedding_model: Optional[str] = None
+        self.embedding_mode: str = "sentence-transformers"
+        self.embedding_options: dict[str, Any] = {}
+        self.embedding_use_server: bool = False
+        self.embedding_port: Optional[int] = None
         # Avoid materializing a single gigantic global map to reduce memory
         # footprint on very large corpora (e.g., 60M+ passages). Instead, keep
         # per-shard maps and do a lightweight per-shard lookup on demand.
@@ -211,6 +217,39 @@ class PassageManager:
                 self.passage_files[passage_file] = passage_file
                 self._total_count += len(offset_map)
 
+    def configure_embedding_pipeline(
+        self,
+        embedding_model: str,
+        embedding_mode: str = "sentence-transformers",
+        embedding_options: Optional[dict[str, Any]] = None,
+        use_server: bool = False,
+        port: Optional[int] = None,
+    ) -> None:
+        self.embedding_model = embedding_model
+        self.embedding_mode = embedding_mode
+        self.embedding_options = embedding_options or {}
+        self.embedding_use_server = use_server
+        self.embedding_port = port
+
+    def _iter_passages(self):
+        for passage_file in self.passage_files.values():
+            with open(passage_file, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        yield json.loads(line)
+
+    def _passage_to_search_dict(self, passage: dict[str, Any]) -> dict[str, Any]:
+        metadata = passage.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        passage_id = str(passage.get("id") or metadata.get("id"))
+        return {
+            "id": passage_id,
+            "score": 0.0,
+            "text": passage.get("text", ""),
+            "metadata": metadata,
+        }
+
     def get_passage(self, passage_id: str) -> dict[str, Any]:
         # Fast path: check each shard map (there are typically few shards).
         # This avoids building a massive combined dict while keeping lookups
@@ -275,36 +314,169 @@ class PassageManager:
         logger.debug(f"Filtered results: {len(filtered_results)} remaining")
         return filtered_results
 
-    def filter_all_passages(
-        self,
-        metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]],
-        exclude_ids: set[str],
-        limit: int,
-    ) -> list[SearchResult]:
-        """Scan stored passages to backfill filtered search results."""
-        matches: list[SearchResult] = []
+    def facets(
+        self, fields: list[str], max_values_per_field: int = 1000
+    ) -> dict[str, dict[Any, int]]:
+        """Count metadata values for the requested fields across all passages."""
+        if max_values_per_field < 1:
+            raise ValueError("max_values_per_field must be >= 1")
+
+        counters: dict[str, Counter[Any]] = {field: Counter() for field in fields}
+        if not counters:
+            return {}
+
         for passage_file in self.passage_files.values():
             with open(passage_file, encoding="utf-8") as f:
                 for line in f:
                     if not line.strip():
                         continue
                     data = json.loads(line)
-                    passage_id = data["id"]
-                    if passage_id in exclude_ids:
+                    metadata = data.get("metadata", {})
+                    if not isinstance(metadata, dict):
                         continue
-                    candidate = SearchResult(
-                        id=passage_id,
-                        score=float("-inf"),
-                        text=data["text"],
-                        metadata=data.get("metadata", {}),
-                    )
-                    filtered = self.filter_search_results([candidate], metadata_filters)
-                    if filtered:
-                        matches.append(filtered[0])
-                        exclude_ids.add(passage_id)
-                        if len(matches) >= limit:
-                            return matches
-        return matches
+                    for field_name, counter in counters.items():
+                        if field_name not in metadata:
+                            continue
+                        value = metadata[field_name]
+                        try:
+                            counter[value] += 1
+                        except TypeError:
+                            counter[json.dumps(value, sort_keys=True)] += 1
+
+        return {
+            field_name: dict(counter.most_common(max_values_per_field))
+            for field_name, counter in counters.items()
+        }
+
+    def score_filtered_subset(
+        self,
+        query_embedding: np.ndarray,
+        metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]],
+        top_k: int,
+        exclude_ids: Optional[set[str]] = None,
+    ) -> list[SearchResult]:
+        """Brute-force score passages matching metadata filters against the query embedding."""
+        if top_k <= 0:
+            return []
+        if not self.embedding_model:
+            raise ValueError("PassageManager embedding pipeline is not configured.")
+
+        excluded = {str(passage_id) for passage_id in (exclude_ids or set())}
+        matches: list[SearchResult] = []
+        for passage in self._iter_passages():
+            result_dict = self._passage_to_search_dict(passage)
+            if result_dict["id"] in excluded:
+                continue
+            if not self.filter_engine.apply_filters([result_dict], metadata_filters):
+                continue
+            matches.append(
+                SearchResult(
+                    id=result_dict["id"],
+                    score=0.0,
+                    text=result_dict["text"],
+                    metadata=result_dict["metadata"],
+                )
+            )
+
+        if not matches:
+            return []
+
+        passage_embeddings = compute_embeddings(
+            [result.text for result in matches],
+            self.embedding_model,
+            self.embedding_mode,
+            use_server=self.embedding_use_server,
+            port=self.embedding_port,
+            provider_options=self.embedding_options,
+        )
+
+        query_vector = np.asarray(query_embedding, dtype=np.float32)
+        if query_vector.ndim == 2:
+            query_vector = query_vector[0]
+        passage_vectors = np.asarray(passage_embeddings, dtype=np.float32)
+        if passage_vectors.ndim != 2:
+            raise ValueError("Passage embeddings must be a 2D array.")
+        if passage_vectors.shape[1] != query_vector.shape[0]:
+            raise ValueError(
+                f"Embedding dimension mismatch: passages={passage_vectors.shape[1]}, "
+                f"query={query_vector.shape[0]}"
+            )
+
+        scores = passage_vectors @ query_vector
+        scored_results = [
+            SearchResult(
+                id=result.id,
+                score=float(score),
+                text=result.text,
+                metadata=result.metadata,
+            )
+            for result, score in zip(matches, scores)
+        ]
+        return sorted(scored_results, key=lambda result: result.score, reverse=True)[:top_k]
+
+    def estimate_selectivity(
+        self, metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]]
+    ) -> float:
+        """Estimate filter selectivity as matching passages divided by total passages."""
+        return self.filter_stats(metadata_filters)["filter_selectivity"]
+
+    def filter_stats(
+        self, metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]]
+    ) -> dict[str, int | float]:
+        """Count passages matching metadata filters and return total/selectivity stats."""
+        total = len(self)
+        if total == 0:
+            return {
+                "total_passages": 0,
+                "filter_matches": 0,
+                "filter_selectivity": 0.0,
+            }
+
+        matches = 0
+        for passage in self._iter_passages():
+            result_dict = self._passage_to_search_dict(passage)
+            if self.filter_engine.apply_filters([result_dict], metadata_filters):
+                matches += 1
+        return {
+            "total_passages": total,
+            "filter_matches": matches,
+            "filter_selectivity": matches / total,
+        }
+
+    def fetch_siblings(
+        self, source_document_id: str, chunk_seq: int, before: int, after: int
+    ) -> list[SearchResult]:
+        """Fetch adjacent chunks from the same source document."""
+        if before < 0 or after < 0:
+            raise ValueError("before and after must be >= 0")
+
+        wanted = set(range(chunk_seq - before, chunk_seq + after + 1))
+        wanted.discard(chunk_seq)
+        if not wanted:
+            return []
+
+        siblings: list[SearchResult] = []
+        for passage in self._iter_passages():
+            result_dict = self._passage_to_search_dict(passage)
+            metadata = result_dict["metadata"]
+            if metadata.get("source_document_id") != source_document_id:
+                continue
+            try:
+                sibling_seq = int(metadata.get("chunk_seq"))
+            except (TypeError, ValueError):
+                continue
+            if sibling_seq not in wanted:
+                continue
+            siblings.append(
+                SearchResult(
+                    id=result_dict["id"],
+                    score=0.0,
+                    text=result_dict["text"],
+                    metadata=metadata,
+                )
+            )
+
+        return sorted(siblings, key=lambda result: int(result.metadata["chunk_seq"]))
 
     def __len__(self) -> int:
         return self._total_count
@@ -1145,6 +1317,11 @@ class LeannSearcher:
         self.passage_manager = PassageManager(
             self.meta_data.get("passage_sources", []), metadata_file_path=self.meta_path_str
         )
+        self.passage_manager.configure_embedding_pipeline(
+            self.embedding_model,
+            self.embedding_mode,
+            self.embedding_options,
+        )
         # Preserve backend name for conditional parameter forwarding
         self.backend_name = backend_name
         backend_factory = BACKEND_REGISTRY.get(backend_name)
@@ -1185,6 +1362,84 @@ class LeannSearcher:
         except Exception as exc:
             logger.warning(f"Warmup embedding failed (ignored): {exc}")
 
+    def facets(
+        self, fields: list[str], max_values_per_field: int = 1000
+    ) -> dict[str, dict[Any, int]]:
+        """Return metadata facet counts for the requested fields."""
+        return self.passage_manager.facets(fields, max_values_per_field=max_values_per_field)
+
+    def _diversify_results(
+        self,
+        results: list[SearchResult],
+        diversify_by: Union[str, list[str], None],
+        max_per_group: int,
+        top_k: int,
+    ) -> list[SearchResult]:
+        if diversify_by is None:
+            return results
+        if max_per_group < 1:
+            raise ValueError("max_per_group must be >= 1")
+
+        fields = [diversify_by] if isinstance(diversify_by, str) else list(diversify_by)
+        group_counts: dict[tuple[Any, ...], int] = defaultdict(int)
+        diversified: list[SearchResult] = []
+        for result in results:
+            group_key = tuple(result.metadata.get(field) for field in fields)
+            if group_counts[group_key] >= max_per_group:
+                continue
+            group_counts[group_key] += 1
+            diversified.append(result)
+            if len(diversified) >= top_k:
+                break
+        return diversified
+
+    def expand_context(self, hit: SearchResult, before: int = 1, after: int = 1) -> SearchResult:
+        """Return a search hit with adjacent chunk siblings attached."""
+        if before < 0 or after < 0:
+            raise ValueError("before and after must be >= 0")
+
+        source_document_id = hit.metadata.get("source_document_id")
+        chunk_seq = hit.metadata.get("chunk_seq")
+        if source_document_id is None or chunk_seq is None:
+            return SearchResult(
+                id=hit.id,
+                score=hit.score,
+                text=hit.text,
+                metadata=hit.metadata,
+                siblings=None,
+            )
+
+        try:
+            chunk_seq_int = int(chunk_seq)
+        except (TypeError, ValueError):
+            return SearchResult(
+                id=hit.id,
+                score=hit.score,
+                text=hit.text,
+                metadata=hit.metadata,
+                siblings=None,
+            )
+
+        return SearchResult(
+            id=hit.id,
+            score=hit.score,
+            text=hit.text,
+            metadata=hit.metadata,
+            siblings=self.passage_manager.fetch_siblings(
+                source_document_id, chunk_seq_int, before, after
+            ),
+        )
+
+    def _expand_context_results(
+        self, results: list[SearchResult], context_window: int
+    ) -> list[SearchResult]:
+        if context_window <= 0:
+            return results
+        return [
+            self.expand_context(result, before=context_window, after=context_window)
+            for result in results
+        ]
+
     def search(
         self,
         query: str,
@@ -1196,6 +1451,12 @@ class LeannSearcher:
         pruning_strategy: Literal["global", "local", "proportional"] = "global",
         expected_zmq_port: int = 5557,
         metadata_filters: Optional[dict[str, dict[str, Union[str, int, float, bool, list]]]] = None,
+        prefilter: Literal["auto", "always", "never"] = "auto",
+        prefilter_threshold: float = 0.05,
+        explain_filters: bool = False,
+        diversify_by: Union[str, list[str], None] = None,
+        max_per_group: int = 2,
+        context_window: int = 0,
         batch_size: int = 0,
         use_grep: bool = False,
         gemma: float = 1.0,
@@ -1204,7 +1465,7 @@ class LeannSearcher:
         temporal_overscan: int = 10,
         temporal_now: Optional[datetime] = None,
         **kwargs,
-    ) -> list[SearchResult]:
+    ) -> list[SearchResult] | tuple[list[SearchResult], dict[str, Any]]:
         """
         Search for nearest neighbors with optional metadata filtering.
 
@@ -1225,27 +1486,38 @@ class LeannSearcher:
                 - Membership: "in", "not_in"
                 - String: "contains", "starts_with", "ends_with"
                 Example: {"chapter": {"<=": 5}, "tags": {"in": ["fiction", "drama"]}}
+            prefilter: Metadata filter routing mode. "auto" scores the filtered subset directly
+                when filter selectivity is below prefilter_threshold, avoiding sparse-filter
+                false zeros from ANN + post-filter. "always" forces this path; "never" preserves
+                ANN + post-filter behavior.
+            prefilter_threshold: Selectivity threshold for auto prefilter routing.
+            explain_filters: When True, return (results, diagnostics) with metadata filter
+                selectivity and routing information. The default returns results directly.
+            diversify_by: Metadata field or fields used to cap results per group after scoring.
+            max_per_group: Maximum number of results to keep for each diversify_by group.
+            context_window: Number of adjacent sibling chunks to attach before and after each hit.
             gemma: Weight of vector search results in hybrid search (0.0-1.0), 1 = pure vector search, 0 = pure keyword search
-            enable_temporal: When true, parse natural-language time expressions from the query
-                into metadata filters and embed the stripped semantic query.
-            temporal_overscan: Candidate multiplier used when temporal parsing adds filters.
+            enable_temporal: When True, parse natural-language time expressions from the query
+                into event_time metadata filters and embed the stripped semantic query.
+            temporal_overscan: Candidate multiplier used when temporal parsing adds filters
+                (top_k * temporal_overscan is fetched before filtering).
             temporal_now: Optional reference time for deterministic temporal parsing.
             **kwargs: Backend-specific parameters
 
         Returns:
-            List of SearchResult objects with text, metadata, and similarity scores
+            List of SearchResult objects, or (results, diagnostics) when explain_filters=True.
         """
-        # Handle grep search
-        if use_grep:
-            return self._grep_search(query, top_k)
+        if prefilter not in {"auto", "always", "never"}:
+            raise ValueError("prefilter must be one of 'auto', 'always', or 'never'")
+        if max_per_group < 1:
+            raise ValueError("max_per_group must be >= 1")
+        if context_window < 0:
+            raise ValueError("context_window must be >= 0")
 
-        logger.info("🔍 LeannSearcher.search() called:")
-        logger.info(f"  Query: '{query}'")
-        logger.info(f"  Top_k: {top_k}")
-        logger.info(f"  Metadata filters: {metadata_filters}")
-        logger.info(f"  Additional kwargs: {kwargs}")
-
-        requested_top_k = top_k
+        # Wave 1 temporal: opt-in NL time-window parsing. When enable_temporal=True,
+        # strip time expressions from the query (so embedding is semantic only) and
+        # merge them as event_time filters with caller filters taking precedence.
+        # Overscan multiplies ANN top_k so date filters don't drain the result set.
         if enable_temporal:
             stripped_query, temporal_filters = parse_temporal_query(query, temporal_now)
             if temporal_filters:
@@ -1259,6 +1531,42 @@ class LeannSearcher:
                 logger.info(f"  Temporal query stripped to: '{query}'")
                 logger.info(f"  Temporal filters: {temporal_filters}")
                 logger.info(f"  Temporal overscan top_k: {top_k}")
+
+        def _return_with_diagnostics(
+            search_results: list[SearchResult],
+            *,
+            total_passages: int,
+            filter_matches: int,
+            filter_selectivity: float,
+            prefilter_mode_used: Literal[
+                "bruteforce_filtered_subset", "ann_postfilter", "no_filter"
+            ],
+            ann_candidates_requested: int,
+            ann_candidates_returned: int,
+            postfilter_survivors: int,
+        ) -> list[SearchResult] | tuple[list[SearchResult], dict[str, Any]]:
+            if not explain_filters:
+                return search_results
+            return search_results, {
+                "total_passages": total_passages,
+                "filter_matches": filter_matches,
+                "filter_selectivity": filter_selectivity,
+                "prefilter_mode_used": prefilter_mode_used,
+                "ann_candidates_requested": ann_candidates_requested,
+                "ann_candidates_returned": ann_candidates_returned,
+                "postfilter_survivors": postfilter_survivors,
+                "results_returned": len(search_results),
+            }
+
+        # Handle grep search
+        if use_grep:
+            return self._grep_search(query, top_k)
+
+        logger.info("🔍 LeannSearcher.search() called:")
+        logger.info(f"  Query: '{query}'")
+        logger.info(f"  Top_k: {top_k}")
+        logger.info(f"  Metadata filters: {metadata_filters}")
+        logger.info(f"  Additional kwargs: {kwargs}")
 
         # Smart top_k detection and adjustment
         # Use PassageManager length (sum of shard sizes) to avoid
@@ -1335,6 +1643,43 @@ class LeannSearcher:
             embedding_time = time.time() - start_time
             logger.info(f"  Embedding time: {embedding_time} seconds")
 
+            self.passage_manager.configure_embedding_pipeline(
+                self.embedding_model,
+                self.embedding_mode,
+                self.embedding_options,
+                use_server=effective_recompute,
+                port=zmq_port,
+            )
+            filter_stats: dict[str, int | float] | None = None
+            if metadata_filters and prefilter != "never":
+                filter_stats = self.passage_manager.filter_stats(metadata_filters)
+                selectivity = float(filter_stats["filter_selectivity"])
+                logger.info("  Metadata filter selectivity: %.4f", selectivity)
+                if prefilter == "always" or (
+                    prefilter == "auto" and selectivity < prefilter_threshold
+                ):
+                    logger.info("  Using brute-force scored prefilter path")
+                    prefilter_results = self.passage_manager.score_filtered_subset(
+                        query_embedding, metadata_filters, top_k
+                    )
+                    postfilter_survivors = len(prefilter_results)
+                    prefilter_results = self._diversify_results(
+                        prefilter_results, diversify_by, max_per_group, top_k
+                    )
+                    prefilter_results = self._expand_context_results(
+                        prefilter_results, context_window
+                    )
+                    return _return_with_diagnostics(
+                        prefilter_results,
+                        total_passages=int(filter_stats["total_passages"]),
+                        filter_matches=int(filter_stats["filter_matches"]),
+                        filter_selectivity=selectivity,
+                        prefilter_mode_used="bruteforce_filtered_subset",
+                        ann_candidates_requested=0,
+                        ann_candidates_returned=0,
+                        postfilter_survivors=postfilter_survivors,
+                    )
+
             start_time = time.time()
             backend_search_kwargs: dict[str, Any] = {
                 "complexity": complexity,
@@ -1386,6 +1731,7 @@ class LeannSearcher:
         search_time = time.time() - start_time
         logger.info(f"  Search time in search() LEANN searcher: {search_time} seconds")
         logger.info(f"  Backend returned: labels={len(results.get('labels', [[]])[0])} results")
+        ann_candidates_returned = len(results.get("labels", [[]])[0])
 
         enriched_results = []
         if "labels" in results and "distances" in results:
@@ -1394,8 +1740,6 @@ class LeannSearcher:
             for i, (string_id, dist) in enumerate(
                 zip(results["labels"][0], results["distances"][0])
             ):
-                if str(string_id) == "-1":
-                    continue
                 try:
                     passage_data = self.passage_manager.get_passage(string_id)
                     enriched_results.append(
@@ -1431,23 +1775,40 @@ class LeannSearcher:
             enriched_results = self.passage_manager.filter_search_results(
                 enriched_results, metadata_filters
             )
-            if len(enriched_results) < requested_top_k:
-                seen_ids = {result.id for result in enriched_results}
-                enriched_results.extend(
-                    self.passage_manager.filter_all_passages(
-                        metadata_filters,
-                        seen_ids,
-                        requested_top_k - len(enriched_results),
-                    )
-                )
-
-        enriched_results = enriched_results[:requested_top_k]
+        postfilter_survivors = len(enriched_results)
+        enriched_results = self._diversify_results(
+            enriched_results, diversify_by, max_per_group, top_k
+        )
+        enriched_results = self._expand_context_results(enriched_results, context_window)
 
         # Define color codes outside the loop for final message
         GREEN = "\033[92m"
         RESET = "\033[0m"
         logger.info(f"  {GREEN}✓ Final enriched results: {len(enriched_results)} passages{RESET}")
-        return enriched_results
+        if metadata_filters:
+            if "filter_stats" not in locals() or filter_stats is None:
+                filter_stats = self.passage_manager.filter_stats(metadata_filters)
+            return _return_with_diagnostics(
+                enriched_results,
+                total_passages=int(filter_stats["total_passages"]),
+                filter_matches=int(filter_stats["filter_matches"]),
+                filter_selectivity=float(filter_stats["filter_selectivity"]),
+                prefilter_mode_used="ann_postfilter",
+                ann_candidates_requested=top_k,
+                ann_candidates_returned=ann_candidates_returned,
+                postfilter_survivors=postfilter_survivors,
+            )
+
+        return _return_with_diagnostics(
+            enriched_results,
+            total_passages=len(self.passage_manager),
+            filter_matches=len(self.passage_manager),
+            filter_selectivity=1.0 if len(self.passage_manager) else 0.0,
+            prefilter_mode_used="no_filter",
+            ann_candidates_requested=top_k,
+            ann_candidates_returned=ann_candidates_returned,
+            postfilter_survivors=postfilter_survivors,
+        )
 
     def _init_bm25(self) -> None:
         """Initialize BM25 scorer"""
