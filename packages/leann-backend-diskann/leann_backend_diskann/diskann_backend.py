@@ -20,6 +20,50 @@ from leann.searcher_base import BaseSearcher
 logger = logging.getLogger(__name__)
 
 
+def _run_build_subprocess(
+    work_dir: str,
+    metric: Any,
+    data_file: str,
+    prefix: str,
+    complexity: int,
+    graph_degree: int,
+    search_mem: float,
+    build_mem: float,
+    num_threads: int,
+    pq_disk_bytes: int,
+    out_q: "mp.Queue[tuple[bool, str]]",
+) -> None:
+    """Top-level (picklable) build target for multiprocessing.Process.
+
+    Must be at module scope so macOS spawn-mode can pickle the function
+    reference. Previously this lived as a nested local inside
+    DiskannBuilder.build(), which crashed on macOS Python 3.8+ where
+    `multiprocessing` defaults to spawn and refuses to pickle local
+    closures. See LEANN issue (tests/test_basic.py::test_backend_basic
+    [diskann] previously failed with `Can't pickle local object
+    'DiskannBuilder.build.<locals>._run_build'`).
+    """
+    try:
+        from . import _diskannpy as diskannpy  # type: ignore
+
+        with chdir(work_dir):
+            diskannpy.build_disk_float_index(
+                metric,
+                data_file,
+                prefix,
+                complexity,
+                graph_degree,
+                search_mem,
+                build_mem,
+                num_threads,
+                pq_disk_bytes,
+                "",
+            )
+        out_q.put((True, "ok"))
+    except Exception as e:
+        out_q.put((False, str(e)))
+
+
 @contextlib.contextmanager
 def suppress_cpp_output_if_needed():
     """Suppress C++ stdout/stderr based on LEANN_LOG_LEVEL"""
@@ -269,42 +313,11 @@ class DiskannBuilder(LeannBackendBuilderInterface):
         try:
             # Build in a child process so native crashes/exits in diskannpy
             # do not terminate the main CLI process silently.
-            def _run_build(
-                work_dir: str,
-                metric: Any,
-                data_file: str,
-                prefix: str,
-                complexity: int,
-                graph_degree: int,
-                search_mem: float,
-                build_mem: float,
-                num_threads: int,
-                pq_disk_bytes: int,
-                out_q: "mp.Queue[tuple[bool, str]]",
-            ) -> None:
-                try:
-                    from . import _diskannpy as diskannpy  # type: ignore
-
-                    with chdir(work_dir):
-                        diskannpy.build_disk_float_index(
-                            metric,
-                            data_file,
-                            prefix,
-                            complexity,
-                            graph_degree,
-                            search_mem,
-                            build_mem,
-                            num_threads,
-                            pq_disk_bytes,
-                            "",
-                        )
-                    out_q.put((True, "ok"))
-                except Exception as e:
-                    out_q.put((False, str(e)))
-
+            # _run_build_subprocess is module-level so macOS spawn-mode can
+            # pickle the function reference.
             queue: mp.Queue[tuple[bool, str]] = mp.Queue()
             proc = mp.Process(
-                target=_run_build,
+                target=_run_build_subprocess,
                 args=(
                     str(index_dir),
                     metric_enum,
