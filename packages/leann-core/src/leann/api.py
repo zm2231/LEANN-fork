@@ -13,6 +13,7 @@ import time
 import warnings
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional, Union
 
@@ -273,6 +274,37 @@ class PassageManager:
 
         logger.debug(f"Filtered results: {len(filtered_results)} remaining")
         return filtered_results
+
+    def filter_all_passages(
+        self,
+        metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]],
+        exclude_ids: set[str],
+        limit: int,
+    ) -> list[SearchResult]:
+        """Scan stored passages to backfill filtered search results."""
+        matches: list[SearchResult] = []
+        for passage_file in self.passage_files.values():
+            with open(passage_file, encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    data = json.loads(line)
+                    passage_id = data["id"]
+                    if passage_id in exclude_ids:
+                        continue
+                    candidate = SearchResult(
+                        id=passage_id,
+                        score=float("-inf"),
+                        text=data["text"],
+                        metadata=data.get("metadata", {}),
+                    )
+                    filtered = self.filter_search_results([candidate], metadata_filters)
+                    if filtered:
+                        matches.append(filtered[0])
+                        exclude_ids.add(passage_id)
+                        if len(matches) >= limit:
+                            return matches
+        return matches
 
     def __len__(self) -> int:
         return self._total_count
@@ -1170,6 +1202,7 @@ class LeannSearcher:
         provider_options: Optional[dict[str, Any]] = None,
         enable_temporal: bool = False,
         temporal_overscan: int = 10,
+        temporal_now: Optional[datetime] = None,
         **kwargs,
     ) -> list[SearchResult]:
         """
@@ -1196,6 +1229,7 @@ class LeannSearcher:
             enable_temporal: When true, parse natural-language time expressions from the query
                 into metadata filters and embed the stripped semantic query.
             temporal_overscan: Candidate multiplier used when temporal parsing adds filters.
+            temporal_now: Optional reference time for deterministic temporal parsing.
             **kwargs: Backend-specific parameters
 
         Returns:
@@ -1213,7 +1247,7 @@ class LeannSearcher:
 
         requested_top_k = top_k
         if enable_temporal:
-            stripped_query, temporal_filters = parse_temporal_query(query)
+            stripped_query, temporal_filters = parse_temporal_query(query, temporal_now)
             if temporal_filters:
                 query = stripped_query
                 merged_filters = dict(temporal_filters)
@@ -1360,6 +1394,8 @@ class LeannSearcher:
             for i, (string_id, dist) in enumerate(
                 zip(results["labels"][0], results["distances"][0])
             ):
+                if str(string_id) == "-1":
+                    continue
                 try:
                     passage_data = self.passage_manager.get_passage(string_id)
                     enriched_results.append(
@@ -1395,6 +1431,15 @@ class LeannSearcher:
             enriched_results = self.passage_manager.filter_search_results(
                 enriched_results, metadata_filters
             )
+            if len(enriched_results) < requested_top_k:
+                seen_ids = {result.id for result in enriched_results}
+                enriched_results.extend(
+                    self.passage_manager.filter_all_passages(
+                        metadata_filters,
+                        seen_ids,
+                        requested_top_k - len(enriched_results),
+                    )
+                )
 
         enriched_results = enriched_results[:requested_top_k]
 
