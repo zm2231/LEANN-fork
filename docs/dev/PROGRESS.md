@@ -94,3 +94,10 @@ Tests:
 - `.venv/bin/pytest tests/test_temporal_parser.py` — 37 passed
 - `.venv/bin/pytest -k temporal` — 44 passed, 4 skipped, 425 deselected
 - `.venv/bin/ruff check packages/leann-core/src/leann/temporal.py tests/test_temporal_parser.py` — passed
+
+Atom 5: cced8c1 — `LeannSearcher.search()` now accepts `temporal_strict` and `temporal_axis`, routes parsed windows through a temporal fallback filter, preserves caller temporal-filter precedence, and reports `temporal_axis_routed`, `temporal_axis_fallback_used`, `temporal_strict`, and `temporal_synthesized_axes` in `explain_filters=True` diagnostics.
+
+Tests:
+- `.venv/bin/pytest tests/test_temporal_axis_search.py tests/test_search_temporal.py` — 3 passed, 4 skipped
+- `.venv/bin/pytest -k temporal` — 47 passed, 4 skipped, 425 deselected
+- `.venv/bin/ruff check packages/leann-core/src/leann/api.py packages/leann-core/src/leann/metadata_filter.py tests/test_temporal_axis_search.py tests/test_search_temporal.py` — passed
