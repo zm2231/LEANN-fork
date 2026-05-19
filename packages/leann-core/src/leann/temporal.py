@@ -9,6 +9,8 @@ from re import Match
 
 import dateparser
 
+from .metadata_filter import TemporalAxis
+
 _AGO_RE = re.compile(
     r"\b(?P<count>\d+)\s+(?P<unit>hours?|days?|weeks?|months?|years?)\s+ago\b",
     re.IGNORECASE,
@@ -46,6 +48,16 @@ _ON_DATE_RE = re.compile(
     r"\bon\s+(?P<date>[A-Za-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?)\b", re.IGNORECASE
 )
 _NAMED_DAY_RE = re.compile(r"\b(?P<day>yesterday|today|tomorrow)\b", re.IGNORECASE)
+_INDEXED_AXIS_RE = re.compile(r"\b(?:indexed|ingested|added\s+to\s+the\s+index)\b", re.IGNORECASE)
+_CREATED_AXIS_RE = re.compile(
+    r"\b(?:created|authored|sent|wrote|posted|made|drafted)\b", re.IGNORECASE
+)
+_MODIFIED_AXIS_RE = re.compile(
+    r"\b(?:edited|modified|updated|changed|amended|revised|touched)\b", re.IGNORECASE
+)
+_EVENT_AXIS_RE = re.compile(
+    r"\b(?:happening|scheduled|during|starting|ending|occurred)\b", re.IGNORECASE
+)
 
 _WEEKDAYS = {
     "monday": 0,
@@ -59,11 +71,22 @@ _WEEKDAYS = {
 _MONTHS = {name.lower(): index for index, name in enumerate(calendar.month_name) if name}
 
 
+class TemporalFilter(dict[str, dict[str, str]]):
+    """Metadata filter with the routed temporal axis attached."""
+
+    def __init__(self, axis: TemporalAxis, start: datetime, end: datetime):
+        window = {">=": start.isoformat(), "<=": end.isoformat()}
+        super().__init__({axis: window})
+        self.axis = axis
+        self.window = window
+
+
 def parse_temporal_query(
     query: str, now: datetime | None = None
-) -> tuple[str, dict[str, dict[str, str]] | None]:
-    """Strip a time expression from a query and return an event_time filter."""
+) -> tuple[str, TemporalFilter | None]:
+    """Strip a time expression from a query and return an axis-routed filter."""
     anchor = _as_utc(now or datetime.now(timezone.utc))
+    axis = _route_axis(query)
     for matcher in (
         _parse_between,
         _parse_ago,
@@ -83,8 +106,20 @@ def parse_temporal_query(
         parsed = matcher(query, anchor)
         if parsed is not None:
             match, start, end = parsed
-            return _strip_match(query, match), _filter(start, end)
+            return _strip_match(query, match), _filter(axis, start, end)
     return query, None
+
+
+def _route_axis(query: str) -> TemporalAxis:
+    if _INDEXED_AXIS_RE.search(query):
+        return "indexed_at"
+    if _CREATED_AXIS_RE.search(query):
+        return "created_at"
+    if _MODIFIED_AXIS_RE.search(query):
+        return "modified_at"
+    if _EVENT_AXIS_RE.search(query):
+        return "event_time"
+    return "event_time"
 
 
 def _parse_ago(query: str, now: datetime) -> tuple[Match[str], datetime, datetime] | None:
@@ -268,8 +303,8 @@ def _parse_date(text: str, now: datetime) -> datetime | None:
     return None if parsed is None else _as_utc(parsed)
 
 
-def _filter(start: datetime, end: datetime) -> dict[str, dict[str, str]]:
-    return {"event_time": {">=": start.isoformat(), "<=": end.isoformat()}}
+def _filter(axis: TemporalAxis, start: datetime, end: datetime) -> TemporalFilter:
+    return TemporalFilter(axis, start, end)
 
 
 def _strip_match(query: str, match: Match[str]) -> str:
