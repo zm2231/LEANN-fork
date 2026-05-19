@@ -35,6 +35,13 @@ TEMPORAL_AXES: tuple[TemporalAxis, ...] = (
     "event_time",
     "indexed_at",
 )
+TEMPORAL_FALLBACK_FILTER = "__temporal_fallback__"
+TEMPORAL_FALLBACK_CHAINS: dict[TemporalAxis, tuple[TemporalAxis, ...]] = {
+    "event_time": ("event_time", "created_at", "modified_at"),
+    "created_at": ("created_at", "event_time", "modified_at"),
+    "modified_at": ("modified_at", "created_at", "event_time"),
+    "indexed_at": ("indexed_at",),
+}
 
 
 def validate_temporal_axis(axis: str) -> TemporalAxis:
@@ -42,6 +49,23 @@ def validate_temporal_axis(axis: str) -> TemporalAxis:
     if axis not in TEMPORAL_AXES:
         raise ValueError(f"unsupported temporal axis: {axis}")
     return cast(TemporalAxis, axis)
+
+
+def temporal_axis_chain(axis: TemporalAxis, strict: bool = False) -> tuple[TemporalAxis, ...]:
+    """Return the axis fallback order for a routed temporal axis."""
+    if strict:
+        return (axis,)
+    return TEMPORAL_FALLBACK_CHAINS[axis]
+
+
+def resolve_temporal_axis(
+    metadata: dict[str, Any], axis: TemporalAxis, strict: bool = False
+) -> TemporalAxis | None:
+    """Return the first available axis for a chunk under the fallback policy."""
+    for candidate in temporal_axis_chain(axis, strict):
+        if metadata.get(candidate) is not None:
+            return candidate
+    return None
 
 
 class MetadataFilterEngine:
@@ -115,7 +139,37 @@ class MetadataFilterEngine:
             True if all filters pass, False otherwise
         """
         for field_name, filter_spec in filters.items():
+            if field_name == TEMPORAL_FALLBACK_FILTER:
+                if not self._evaluate_temporal_fallback_filter(result, filter_spec):
+                    return False
+                continue
             if not self._evaluate_field_filter(result, field_name, filter_spec):
+                return False
+        return True
+
+    def _evaluate_temporal_fallback_filter(
+        self, result: dict[str, Any], filter_spec: FilterSpec
+    ) -> bool:
+        metadata = result.get("metadata", {})
+        if not isinstance(metadata, dict):
+            return False
+
+        axis = validate_temporal_axis(str(filter_spec["axis"]))
+        strict = bool(filter_spec.get("strict", False))
+        window = filter_spec["window"]
+        if not isinstance(window, dict):
+            return False
+
+        used_axis = resolve_temporal_axis(metadata, axis, strict)
+        if used_axis is None:
+            return False
+
+        field_value = metadata[used_axis]
+        for operator, expected_value in window.items():
+            if operator not in self.operators:
+                logger.warning(f"Unsupported operator: {operator}")
+                return False
+            if not self.operators[operator](field_value, expected_value):
                 return False
         return True
 

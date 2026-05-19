@@ -26,7 +26,13 @@ from leann.interface import LeannBackendSearcherInterface
 from .chat import get_llm
 from .embedding_server_manager import EmbeddingServerManager
 from .interface import LeannBackendFactoryInterface
-from .metadata_filter import MetadataFilterEngine
+from .metadata_filter import (
+    TEMPORAL_AXES,
+    TEMPORAL_FALLBACK_FILTER,
+    MetadataFilterEngine,
+    resolve_temporal_axis,
+    validate_temporal_axis,
+)
 from .registry import BACKEND_REGISTRY
 from .temporal import parse_temporal_query
 
@@ -1484,6 +1490,8 @@ class LeannSearcher:
         gemma: float = 1.0,
         provider_options: Optional[dict[str, Any]] = None,
         enable_temporal: bool = False,
+        temporal_strict: bool = False,
+        temporal_axis: Optional[str] = None,
         temporal_overscan: int = 10,
         temporal_now: Optional[datetime] = None,
         **kwargs,
@@ -1520,7 +1528,11 @@ class LeannSearcher:
             context_window: Number of adjacent sibling chunks to attach before and after each hit.
             gemma: Weight of vector search results in hybrid search (0.0-1.0), 1 = pure vector search, 0 = pure keyword search
             enable_temporal: When True, parse natural-language time expressions from the query
-                into event_time metadata filters and embed the stripped semantic query.
+                into axis-routed temporal metadata filters and embed the stripped semantic query.
+            temporal_strict: When True, require the routed/overridden temporal axis to exist
+                instead of falling back to adjacent axes.
+            temporal_axis: Optional override for parser routing. Must be one of
+                created_at, modified_at, event_time, indexed_at.
             temporal_overscan: Candidate multiplier used when temporal parsing adds filters
                 (top_k * temporal_overscan is fetched before filtering).
             temporal_now: Optional reference time for deterministic temporal parsing.
@@ -1536,22 +1548,50 @@ class LeannSearcher:
         if context_window < 0:
             raise ValueError("context_window must be >= 0")
 
-        # Wave 1 temporal: opt-in NL time-window parsing. When enable_temporal=True,
-        # strip time expressions from the query (so embedding is semantic only) and
-        # merge them as event_time filters with caller filters taking precedence.
+        temporal_axis_routed = None
+        temporal_filter_spec = None
+
+        if temporal_axis is not None:
+            validate_temporal_axis(temporal_axis)
+
+        # Wave 1.5 temporal: opt-in NL time-window parsing. When enable_temporal=True,
+        # strip time expressions from the query (so embedding is semantic only), route
+        # the time window to a temporal axis, and merge filters with caller precedence.
         # Overscan multiplies ANN top_k so date filters don't drain the result set.
         if enable_temporal:
             stripped_query, temporal_filters = parse_temporal_query(query, temporal_now)
             if temporal_filters:
                 query = stripped_query
-                merged_filters = dict(temporal_filters)
+                temporal_axis_routed = (
+                    validate_temporal_axis(temporal_axis)
+                    if temporal_axis is not None
+                    else temporal_filters.axis
+                )
+                temporal_filter_spec = {
+                    "axis": temporal_axis_routed,
+                    "window": temporal_filters.window,
+                    "strict": temporal_strict,
+                }
+                caller_has_temporal_filter = bool(
+                    metadata_filters
+                    and (
+                        TEMPORAL_FALLBACK_FILTER in metadata_filters
+                        or any(axis in metadata_filters for axis in TEMPORAL_AXES)
+                    )
+                )
+                merged_filters = (
+                    {}
+                    if caller_has_temporal_filter
+                    else {TEMPORAL_FALLBACK_FILTER: temporal_filter_spec}
+                )
                 if metadata_filters:
                     merged_filters.update(metadata_filters)
                 metadata_filters = merged_filters
                 temporal_overscan = max(int(temporal_overscan), 1)
                 top_k *= temporal_overscan
                 logger.info(f"  Temporal query stripped to: '{query}'")
-                logger.info(f"  Temporal filters: {temporal_filters}")
+                logger.info(f"  Temporal axis: {temporal_axis_routed}")
+                logger.info(f"  Temporal filters: {metadata_filters}")
                 logger.info(f"  Temporal overscan top_k: {top_k}")
 
         def _return_with_diagnostics(
@@ -1569,7 +1609,7 @@ class LeannSearcher:
         ) -> list[SearchResult] | tuple[list[SearchResult], dict[str, Any]]:
             if not explain_filters:
                 return search_results
-            return search_results, {
+            diagnostics = {
                 "total_passages": total_passages,
                 "filter_matches": filter_matches,
                 "filter_selectivity": filter_selectivity,
@@ -1579,6 +1619,33 @@ class LeannSearcher:
                 "postfilter_survivors": postfilter_survivors,
                 "results_returned": len(search_results),
             }
+            if temporal_axis_routed is not None:
+                fallback_used = []
+                synthesized_axes = 0
+                strict = (
+                    bool(temporal_filter_spec.get("strict", False))
+                    if temporal_filter_spec
+                    else temporal_strict
+                )
+                for result in search_results:
+                    used_axis = resolve_temporal_axis(
+                        result.metadata, temporal_axis_routed, strict
+                    )
+                    if used_axis is None:
+                        continue
+                    if used_axis != temporal_axis_routed:
+                        fallback_used.append((result.id, used_axis))
+                    if result.metadata.get(f"{used_axis}_synthesized"):
+                        synthesized_axes += 1
+                diagnostics.update(
+                    {
+                        "temporal_axis_routed": temporal_axis_routed,
+                        "temporal_axis_fallback_used": fallback_used,
+                        "temporal_strict": strict,
+                        "temporal_synthesized_axes": synthesized_axes,
+                    }
+                )
+            return search_results, diagnostics
 
         # Handle grep search
         if use_grep:

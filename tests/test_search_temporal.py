@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from leann import LeannSearcher
+from leann.metadata_filter import TEMPORAL_FALLBACK_FILTER
 
 ROOT = Path(__file__).resolve().parents[1]
 SLACK_INDEX = ROOT / ".leann" / "indexes" / "eval-slack" / "documents.leann"
@@ -61,7 +62,7 @@ def test_search_merges_caller_filters_with_parsed_temporal_filters(monkeypatch):
     )
 
     assert captured_filters
-    assert "event_time" in captured_filters[-1]
+    assert captured_filters[-1][TEMPORAL_FALLBACK_FILTER]["axis"] == "event_time"
     assert captured_filters[-1]["source_type"] == {"==": "slack"}
 
 
