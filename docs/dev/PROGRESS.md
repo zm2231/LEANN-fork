@@ -101,3 +101,11 @@ Tests:
 - `.venv/bin/pytest tests/test_temporal_axis_search.py tests/test_search_temporal.py` — 3 passed, 4 skipped
 - `.venv/bin/pytest -k temporal` — 47 passed, 4 skipped, 425 deselected
 - `.venv/bin/ruff check packages/leann-core/src/leann/api.py packages/leann-core/src/leann/metadata_filter.py tests/test_temporal_axis_search.py tests/test_search_temporal.py` — passed
+
+Atom 6: 8a3f84b — specialized readers now emit available multi-axis temporal metadata: email (`Date` / `X-Last-Modified`), iMessage (`date` / optional `date_edited`), browser history (`first_visit_time` / `last_visit_time`), WeChat (`createTime`), ChatGPT / Claude exports, plus eval git commits (`author_date` / `commit_date`) and Slack (`ts`). Added shared UTC normalization helpers and synthetic per-reader regressions.
+
+Tests:
+- `.venv/bin/pytest tests/test_reader_temporal_axes.py` — 8 passed
+- `.venv/bin/pytest tests/test_signals_schema.py` — 3 passed
+- `.venv/bin/pytest -k temporal` — 55 passed, 4 skipped, 425 deselected
+- `.venv/bin/ruff check apps/temporal_metadata.py apps/email_data/LEANN_email_reader.py apps/imessage_data/imessage_reader.py apps/history_data/history.py apps/history_data/wechat_history.py apps/chatgpt_data/chatgpt_reader.py apps/claude_data/claude_reader.py scripts/build_eval_corpus.py tests/test_reader_temporal_axes.py tests/test_signals_schema.py` — passed
