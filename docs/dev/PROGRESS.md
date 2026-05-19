@@ -80,3 +80,10 @@ Tests:
 - `.venv/bin/pytest tests/test_indexed_at.py` — 3 passed
 - `.venv/bin/pytest -k temporal` — 24 passed, 4 skipped, 424 deselected
 - `.venv/bin/ruff check packages/leann-core/src/leann/cli.py tests/test_indexed_at.py` — passed
+
+Atom 3: 3cf823b — Apple Calendar indexing keeps `event_time` as the event start and now emits `created_at` / `modified_at` from detected Calendar Cache columns when present. When the source schema lacks those columns, the reader synthesizes both axes from `event_time` and marks `created_at_synthesized` / `modified_at_synthesized` so later diagnostics can report degenerate axes.
+
+Tests:
+- `.venv/bin/pytest tests/test_calendar_event_time.py tests/test_signals_schema.py::test_calendar_chunks_follow_signals_schema` — 3 passed
+- `.venv/bin/pytest -k temporal` — 24 passed, 4 skipped, 425 deselected
+- `.venv/bin/ruff check packages/leann-core/src/leann/cli.py tests/test_calendar_event_time.py tests/test_signals_schema.py` — passed
