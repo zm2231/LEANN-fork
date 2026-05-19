@@ -121,8 +121,9 @@ def test_git_commit_chunks_from_eval_builder_follow_signals_schema(tmp_path, mon
     def fake_check_output(command, **kwargs):
         if command[:2] == ["git", "log"]:
             return (
-                "abc123\x1f2026-05-01T12:00:00+00:00\x1fZain\x1f"
-                "Add temporal filters #12\x1fBody mentions https://example.com\x1e"
+                "abc123\x1f2026-05-01T12:00:00+00:00\x1f"
+                "2026-05-01T13:00:00+00:00\x1fZain\x1fAdd temporal filters #12\x1f"
+                "Body mentions https://example.com\x1e"
             )
         if command[:2] == ["git", "show"]:
             return "packages/leann-core/src/leann/api.py\n"

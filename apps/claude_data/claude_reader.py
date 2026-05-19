@@ -12,6 +12,8 @@ from zipfile import ZipFile
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 
+from apps.temporal_metadata import parse_temporal_value
+
 
 class ClaudeReader(BaseReader):
     """
@@ -372,12 +374,18 @@ Messages ({len(messages)} messages):
 
                 metadata = {}
                 if include_metadata:
+                    event_time = parse_temporal_value(conversation.get("timestamp"))
                     metadata = {
                         "title": conversation.get("title", "Claude Conversation"),
                         "timestamp": conversation.get("timestamp", "Unknown"),
                         "message_count": len(conversation.get("messages", [])),
                         "source": "Claude Export",
+                        "source_type": "claude",
+                        "source_id": conversation.get("title", "Claude Conversation"),
                     }
+                    if event_time:
+                        metadata["created_at"] = event_time
+                        metadata["event_time"] = event_time
 
                 doc = Document(text=doc_content, metadata=metadata)
                 docs.append(doc)
@@ -405,12 +413,20 @@ Message: {content}
 
                     metadata = {}
                     if include_metadata:
+                        event_time = parse_temporal_value(
+                            msg_timestamp or conversation.get("timestamp")
+                        )
                         metadata = {
                             "conversation_title": conversation.get("title", "Claude Conversation"),
                             "role": role,
                             "timestamp": msg_timestamp or conversation.get("timestamp", "Unknown"),
                             "source": "Claude Export",
+                            "source_type": "claude",
+                            "source_id": f"{conversation.get('title', 'Claude Conversation')}:{count}",
                         }
+                        if event_time:
+                            metadata["created_at"] = event_time
+                            metadata["event_time"] = event_time
 
                     doc = Document(text=doc_content, metadata=metadata)
                     docs.append(doc)

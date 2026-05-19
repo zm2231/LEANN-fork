@@ -10,6 +10,8 @@ from typing import Any
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 
+from apps.temporal_metadata import unix_to_utc_iso
+
 
 class WeChatHistoryReader(BaseReader):
     """
@@ -475,9 +477,21 @@ Messages ({len(messages)} messages, {message_group["total_length"]} chars):
                             doc_content, contact_name = self._create_concatenated_content(
                                 message_group, contact_name
                             )
+                            event_time = unix_to_utc_iso(message_group.get("start_time"))
+                            modified_at = unix_to_utc_iso(message_group.get("end_time"))
+                            metadata = {
+                                "contact_name": contact_name,
+                                "source_type": "wechat",
+                                "source_id": f"{contact_name}:{message_group.get('start_time')}",
+                            }
+                            if event_time:
+                                metadata["created_at"] = event_time
+                                metadata["event_time"] = event_time
+                            if modified_at:
+                                metadata["modified_at"] = modified_at
                             doc = Document(
                                 text=doc_content,
-                                metadata={"contact_name": contact_name},
+                                metadata=metadata,
                             )
                             docs.append(doc)
                             count += 1
@@ -535,7 +549,20 @@ Message: {readable_text if readable_text else message_text}
 
                             # Create document with embedded metadata
                             doc = Document(
-                                text=doc_content, metadata={"contact_name": contact_name}
+                                text=doc_content,
+                                metadata={
+                                    "contact_name": contact_name,
+                                    "source_type": "wechat",
+                                    "source_id": f"{contact_name}:{create_time}",
+                                    **(
+                                        {
+                                            "created_at": unix_to_utc_iso(create_time),
+                                            "event_time": unix_to_utc_iso(create_time),
+                                        }
+                                        if unix_to_utc_iso(create_time)
+                                        else {}
+                                    ),
+                                },
                             )
                             docs.append(doc)
                             count += 1

@@ -6,6 +6,8 @@ from typing import Any
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 
+from apps.temporal_metadata import parse_temporal_value
+
 
 def find_all_messages_directories(root: str | None = None) -> list[Path]:
     """
@@ -98,6 +100,8 @@ class EmlxReader(BaseReader):
                                 from_addr = msg.get("From", "Unknown")
                                 to_addr = msg.get("To", "Unknown")
                                 date = msg.get("Date", "Unknown")
+                                event_time = parse_temporal_value(date)
+                                modified_at = parse_temporal_value(msg.get("X-Last-Modified"))
 
                                 # Extract email body
                                 body = ""
@@ -141,8 +145,24 @@ class EmlxReader(BaseReader):
 {body}
 """
 
-                                    # No separate metadata - everything is in the text
-                                    doc = Document(text=doc_content, metadata={})
+                                    metadata = {
+                                        "source_type": "email",
+                                        "source_id": filepath,
+                                        "source": filepath,
+                                        "author": from_addr,
+                                        "activity_type": "authored",
+                                        "participant_ids": [
+                                            value
+                                            for value in (from_addr, to_addr)
+                                            if value and value != "Unknown"
+                                        ],
+                                    }
+                                    if event_time:
+                                        metadata["created_at"] = event_time
+                                        metadata["event_time"] = event_time
+                                    if modified_at:
+                                        metadata["modified_at"] = modified_at
+                                    doc = Document(text=doc_content, metadata=metadata)
                                     docs.append(doc)
                                     count += 1
                                     successful_files += 1

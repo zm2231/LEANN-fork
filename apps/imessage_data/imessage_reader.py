@@ -12,6 +12,8 @@ from typing import Any
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 
+from apps.temporal_metadata import cocoa_ns_to_utc_iso
+
 
 class IMessageReader(BaseReader):
     """
@@ -109,13 +111,17 @@ class IMessageReader(BaseReader):
             # Connect to the database
             conn = sqlite3.connect(str(db_path))
             cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(message)")
+            columns = {row[1] for row in cursor.fetchall()}
+            edited_expr = "m.date_edited" if "date_edited" in columns else "0"
 
             # Query to get messages with chat and handle information
-            query = """
+            query = f"""
             SELECT
                 m.ROWID as message_id,
                 m.text,
                 m.date,
+                {edited_expr} as date_edited,
                 m.is_from_me,
                 m.service,
                 c.chat_identifier,
@@ -139,6 +145,7 @@ class IMessageReader(BaseReader):
                     message_id,
                     text,
                     date,
+                    date_edited,
                     is_from_me,
                     service,
                     chat_identifier,
@@ -151,6 +158,8 @@ class IMessageReader(BaseReader):
                     "message_id": message_id,
                     "text": text,
                     "timestamp": self._convert_cocoa_timestamp(date),
+                    "created_at": cocoa_ns_to_utc_iso(date),
+                    "modified_at": cocoa_ns_to_utc_iso(date_edited),
                     "is_from_me": bool(is_from_me),
                     "service": service or "iMessage",
                     "chat_identifier": chat_identifier or "Unknown",
@@ -304,6 +313,8 @@ Content: {text}
 
                 metadata = {
                     "source": "iMessage",
+                    "source_type": "imessage",
+                    "source_id": f"chat:{chat_id}",
                     "chat_id": chat_id,
                     "chat_name": first_msg["chat_display_name"],
                     "chat_identifier": first_msg["chat_identifier"],
@@ -314,6 +325,11 @@ Content: {text}
                         {msg["contact_name"] for msg in chat_messages if not msg["is_from_me"]}
                     ),
                 }
+                if first_msg.get("created_at"):
+                    metadata["created_at"] = first_msg["created_at"]
+                    metadata["event_time"] = first_msg["created_at"]
+                if last_msg.get("modified_at") or last_msg.get("created_at"):
+                    metadata["modified_at"] = last_msg.get("modified_at") or last_msg["created_at"]
 
                 doc = Document(text=content, metadata=metadata)
                 docs.append(doc)
@@ -325,6 +341,8 @@ Content: {text}
 
                 metadata = {
                     "source": "iMessage",
+                    "source_type": "imessage",
+                    "source_id": str(message["message_id"]),
                     "message_id": message["message_id"],
                     "chat_id": message["chat_id"],
                     "chat_name": message["chat_display_name"],
@@ -334,6 +352,11 @@ Content: {text}
                     "contact_name": message["contact_name"],
                     "service": message["service"],
                 }
+                if message.get("created_at"):
+                    metadata["created_at"] = message["created_at"]
+                    metadata["event_time"] = message["created_at"]
+                if message.get("modified_at"):
+                    metadata["modified_at"] = message["modified_at"]
 
                 doc = Document(text=content, metadata=metadata)
                 docs.append(doc)
