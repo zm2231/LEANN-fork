@@ -139,10 +139,19 @@ def test_git_commit_chunks_from_eval_builder_follow_signals_schema(tmp_path, mon
 
 
 class FakeCursor:
-    def execute(self, _query, _params):
+    def __init__(self):
+        self.query = ""
+
+    def execute(self, query, _params=None):
+        self.query = query
         return None
 
     def fetchall(self):
+        if "PRAGMA table_info" in self.query:
+            return [
+                (0, "created_date", "REAL", 0, None, 0),
+                (1, "last_modified_date", "REAL", 0, None, 0),
+            ]
         return [
             (
                 123,
@@ -152,6 +161,8 @@ class FakeCursor:
                 "2026-05-15 14:30:00",
                 "2026-05-15 10:30:00",
                 "2026-05-15 11:00:00",
+                "2026-05-10 12:00:00",
+                "2026-05-12 13:00:00",
             )
         ]
 

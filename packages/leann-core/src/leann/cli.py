@@ -64,6 +64,13 @@ def _filesystem_temporal_metadata(metadata: dict[str, Any]) -> dict[str, str]:
     return temporal_metadata
 
 
+def _calendar_timestamp_expr(columns: set[str], candidates: tuple[str, ...]) -> str:
+    for column in candidates:
+        if column in columns:
+            return f"datetime({column} + 978307200, 'unixepoch')"
+    return "NULL"
+
+
 @contextlib.contextmanager
 def suppress_cpp_output(suppress: bool = True):
     """Context manager to suppress C++ stdout/stderr output from FAISS/HNSW
@@ -3082,12 +3089,37 @@ Examples:
             shutil.copy2(calendar_cache, temp_db)
             conn = sqlite3.connect(temp_db)
             cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(CI_EVENT)")
+            columns = {row[1] for row in cursor.fetchall()}
+            created_at_expr = _calendar_timestamp_expr(
+                columns,
+                (
+                    "created_date",
+                    "creation_date",
+                    "date_created",
+                    "created",
+                    "creation_time",
+                ),
+            )
+            modified_at_expr = _calendar_timestamp_expr(
+                columns,
+                (
+                    "last_modified_date",
+                    "last_modified",
+                    "modified_date",
+                    "date_modified",
+                    "updated_date",
+                    "updated",
+                ),
+            )
             cursor.execute(
-                """
+                f"""
                 SELECT rowid as event_id, summary, description, location,
                        datetime(start_date + 978307200, 'unixepoch') as event_time,
                        datetime(start_date + 978307200, 'unixepoch', 'localtime') as event_time_local,
-                       datetime(end_date + 978307200, 'unixepoch', 'localtime') as end_time_local
+                       datetime(end_date + 978307200, 'unixepoch', 'localtime') as end_time_local,
+                       {created_at_expr} as created_at,
+                       {modified_at_expr} as modified_at
                 FROM CI_EVENT ORDER BY start_date DESC LIMIT ?
                 """,
                 (args.max_count,),
@@ -3100,6 +3132,8 @@ Examples:
                 event_time,
                 event_time_local,
                 end_time_local,
+                created_at,
+                modified_at,
             ) in cursor.fetchall():
                 if not summary:
                     continue
@@ -3108,6 +3142,16 @@ Examples:
                 )
                 event_time_local_iso = (
                     datetime.fromisoformat(event_time_local).astimezone().isoformat()
+                )
+                created_at_iso = (
+                    datetime.fromisoformat(created_at).replace(tzinfo=timezone.utc).isoformat()
+                    if created_at
+                    else event_time_iso
+                )
+                modified_at_iso = (
+                    datetime.fromisoformat(modified_at).replace(tzinfo=timezone.utc).isoformat()
+                    if modified_at
+                    else event_time_iso
                 )
                 text = (
                     f"Event: {summary}\nStart: {event_time_local_iso}\nEnd: {end_time_local}\n"
@@ -3122,6 +3166,10 @@ Examples:
                             "source_id": str(event_id),
                             "event_time": event_time_iso,
                             "event_time_local": event_time_local_iso,
+                            "created_at": created_at_iso,
+                            "modified_at": modified_at_iso,
+                            "created_at_synthesized": created_at is None,
+                            "modified_at_synthesized": modified_at is None,
                         },
                     )
                 )
