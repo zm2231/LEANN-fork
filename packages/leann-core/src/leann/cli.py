@@ -39,6 +39,31 @@ def _normalize_path(path: str) -> str:
     return str(Path(path).resolve())
 
 
+def _filesystem_temporal_metadata(metadata: dict[str, Any]) -> dict[str, str]:
+    """Return filesystem temporal axes for a metadata row when a file path is known."""
+    file_path = metadata.get("file_path") or metadata.get("source")
+    if not file_path:
+        return {}
+
+    path = Path(str(file_path))
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return {}
+
+    temporal_metadata: dict[str, str] = {}
+    birthtime = getattr(stat_result, "st_birthtime", None)
+    if birthtime is not None and "created_at" not in metadata:
+        temporal_metadata["created_at"] = datetime.fromtimestamp(
+            birthtime, tz=timezone.utc
+        ).isoformat()
+    if "modified_at" not in metadata:
+        temporal_metadata["modified_at"] = datetime.fromtimestamp(
+            stat_result.st_mtime, tz=timezone.utc
+        ).isoformat()
+    return temporal_metadata
+
+
 @contextlib.contextmanager
 def suppress_cpp_output(suppress: bool = True):
     """Context manager to suppress C++ stdout/stderr output from FAISS/HNSW
@@ -2987,10 +3012,24 @@ Examples:
         for doc in documents:
             if hasattr(doc, "text"):
                 metadata = doc.metadata if hasattr(doc, "metadata") else {}
-                builder.add_text(doc.text, metadata={**metadata, "indexed_at": indexed_at})
+                builder.add_text(
+                    doc.text,
+                    metadata={
+                        **metadata,
+                        **_filesystem_temporal_metadata(metadata),
+                        "indexed_at": indexed_at,
+                    },
+                )
             elif isinstance(doc, dict):
                 metadata = doc.get("metadata", {})
-                builder.add_text(doc["text"], metadata={**metadata, "indexed_at": indexed_at})
+                builder.add_text(
+                    doc["text"],
+                    metadata={
+                        **metadata,
+                        **_filesystem_temporal_metadata(metadata),
+                        "indexed_at": indexed_at,
+                    },
+                )
 
         builder.build_index(index_path)
         self.register_project_dir()
