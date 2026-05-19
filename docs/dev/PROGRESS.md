@@ -73,3 +73,10 @@ Atom 1: bddb1a7 / c45ece2 — SIGNALS now documents the four temporal axes (`cre
 Tests:
 - `.venv/bin/pytest tests/test_temporal_axis_schema.py tests/test_metadata_filter_datetime.py` — 13 passed
 - `.venv/bin/pytest -k temporal` — 23 passed, 4 skipped, 423 deselected
+
+Atom 2: d681017 — `_build_index_from_documents` now enriches filesystem-backed chunks with `created_at` from `st_birthtime` and `modified_at` from `st_mtime` while preserving existing `indexed_at` stamping and omitting filesystem `event_time`. The regression covers the build path plus an explicit guard that `st_ctime` is not used.
+
+Tests:
+- `.venv/bin/pytest tests/test_indexed_at.py` — 3 passed
+- `.venv/bin/pytest -k temporal` — 24 passed, 4 skipped, 424 deselected
+- `.venv/bin/ruff check packages/leann-core/src/leann/cli.py tests/test_indexed_at.py` — passed
