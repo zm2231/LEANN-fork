@@ -7,6 +7,8 @@ from urllib.parse import urlparse
 from llama_index.core import Document
 from llama_index.core.readers.base import BaseReader
 
+from apps.temporal_metadata import unix_to_utc_iso
+
 
 class ChromeHistoryReader(BaseReader):
     """
@@ -56,6 +58,8 @@ class ChromeHistoryReader(BaseReader):
             query = """
             SELECT
                 datetime(last_visit_time/1000000-11644473600,'unixepoch','localtime') as last_visit,
+                (SELECT MIN(visit_time) FROM visits WHERE visits.url = urls.id) as first_visit_raw,
+                last_visit_time,
                 url,
                 title,
                 visit_count,
@@ -75,7 +79,17 @@ class ChromeHistoryReader(BaseReader):
                 if count >= max_count and max_count > 0:
                     break
 
-                last_visit, url, title, visit_count, typed_count, _hidden = row
+                last_visit, first_visit_raw, last_visit_raw, url, title, visit_count, typed_count, _hidden = row
+                first_visit_iso = unix_to_utc_iso(
+                    (float(first_visit_raw) / 1_000_000) - 11644473600
+                    if first_visit_raw
+                    else None
+                )
+                last_visit_iso = unix_to_utc_iso(
+                    (float(last_visit_raw) / 1_000_000) - 11644473600
+                    if last_visit_raw
+                    else None
+                )
 
                 # Create document content with metadata embedded in text
                 # (kept in body so semantic search still sees these fields)
@@ -98,10 +112,17 @@ class ChromeHistoryReader(BaseReader):
                         "url": url or "",
                         "domain": domain,
                         "last_visited": str(last_visit) if last_visit is not None else "",
+                        "source_type": "browser_history",
+                        "source_id": url or "",
                         "visit_count": int(visit_count) if visit_count is not None else 0,
                         "typed_count": int(typed_count) if typed_count is not None else 0,
                     },
                 )
+                if first_visit_iso:
+                    doc.metadata["created_at"] = first_visit_iso
+                if last_visit_iso:
+                    doc.metadata["modified_at"] = last_visit_iso
+                    doc.metadata["event_time"] = last_visit_iso
                 docs.append(doc)
                 count += 1
 

@@ -156,7 +156,9 @@ def ingest_docs() -> list[Document]:
             text = extract_pdf_text(stat_path)
         else:
             continue
-        event_time = utc_iso(datetime.fromtimestamp(stat_path.stat().st_mtime, timezone.utc))
+        stat_result = stat_path.stat()
+        created_at = utc_iso(datetime.fromtimestamp(stat_result.st_birthtime, timezone.utc))
+        modified_at = utc_iso(datetime.fromtimestamp(stat_result.st_mtime, timezone.utc))
         for chunk_index, chunk in enumerate(chunk_text(text)):
             docs.append(
                 Document(
@@ -165,7 +167,8 @@ def ingest_docs() -> list[Document]:
                         "source_type": "document",
                         "source_id": f"{stat_path}#chunk-{chunk_index}",
                         "source_url": stat_path.as_uri() if stat_path.exists() else None,
-                        "event_time": event_time,
+                        "created_at": created_at,
+                        "modified_at": modified_at,
                         "project_id": "jay-abraham-eval",
                         "parent_ref": f"file:{stat_path.name}",
                         "mentioned_urls": mentioned_urls(chunk),
@@ -179,7 +182,7 @@ def ingest_docs() -> list[Document]:
 
 
 def ingest_commits() -> list[Document]:
-    fmt = "%H%x1f%aI%x1f%an%x1f%s%x1f%b%x1e"
+    fmt = "%H%x1f%aI%x1f%cI%x1f%an%x1f%s%x1f%b%x1e"
     raw = subprocess.check_output(
         ["git", "log", "--all", "--no-merges", "--since=2025-06-01", f"--format={fmt}"],
         cwd=ROOT,
@@ -189,7 +192,7 @@ def ingest_commits() -> list[Document]:
     for record in raw.strip("\x1e\n").split("\x1e"):
         if not record.strip():
             continue
-        sha, authored_at, author, subject, body = record.strip("\n").split("\x1f", 4)
+        sha, authored_at, committed_at, author, subject, body = record.strip("\n").split("\x1f", 5)
         files = subprocess.check_output(
             ["git", "show", "--pretty=", "--name-only", sha],
             cwd=ROOT,
@@ -198,6 +201,7 @@ def ingest_commits() -> list[Document]:
         embedded_files = files[:20]
         body_excerpt = body[:1000]
         event_time = utc_iso(datetime.fromisoformat(authored_at))
+        modified_at = utc_iso(datetime.fromisoformat(committed_at))
         text = (
             f"Commit {sha}\nAuthor: {author}\nDate: {event_time}\nSubject: {subject}\n"
             f"{body_excerpt}\nFiles:\n" + "\n".join(embedded_files)
@@ -209,6 +213,8 @@ def ingest_commits() -> list[Document]:
                     "source_type": "git_commit",
                     "source_id": sha,
                     "source_url": f"https://github.com/elyxlz/LEANN/commit/{sha}",
+                    "created_at": event_time,
+                    "modified_at": modified_at,
                     "event_time": event_time,
                     "author": author,
                     "activity_type": "authored",
@@ -250,6 +256,7 @@ def ingest_slack() -> list[Document]:
                         "source_type": "slack",
                         "source_id": f"{channel_id}:{ts}:chunk:{idx}",
                         "source_url": f"slack://channel/{channel_id}/p{ts.replace('.', '')}",
+                        "created_at": event_time,
                         "event_time": event_time,
                         "author": user_id,
                         "activity_type": "authored" if user_id else None,
