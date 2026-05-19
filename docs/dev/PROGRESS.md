@@ -65,3 +65,11 @@ Eval: P@5 0.25 / R@5 0.68 / MRR 0.51 vs baseline 0.08 / 0.23 / 0.20.
 Acceptance bar (R@5 ≥ +30pp, P@5 change ≥ -5pp): met with +45pp recall, +17pp precision, MRR ×2.5.
 
 Wave 1 substrate available for downstream branches to depend on or cherry-pick from. Next planned work (see `docs/dev/NEXT-WAVES.md`): `feat/sparse-prefilter` (independent branch, unblocks sparse-metadata retrieval), `feat/diversify-context` (independent branch, group-by + sibling chunks).
+
+## 2026-05-19: Wave 1.5 multi-axis temporal starts
+
+Atom 1: bddb1a7 / c45ece2 — SIGNALS now documents the four temporal axes (`created_at`, `modified_at`, `event_time`, `indexed_at`), the `temporal_axis` enum, fallback order, and synthesized-axis marker rule. `metadata_filter.py` exports the canonical `TemporalAxis` vocabulary plus `validate_temporal_axis()`, covered by a doctest-backed regression.
+
+Tests:
+- `.venv/bin/pytest tests/test_temporal_axis_schema.py tests/test_metadata_filter_datetime.py` — 13 passed
+- `.venv/bin/pytest -k temporal` — 23 passed, 4 skipped, 423 deselected
