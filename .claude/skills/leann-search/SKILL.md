@@ -134,6 +134,59 @@ s.search(
 )
 ```
 
+### Decision guide
+
+Deeper reference: `docs/dev/DECISIONS-SEARCH.md`.
+
+#### `--recompute` vs `--no-recompute` (search side)
+
+**Must match how the index was built.** Read `meta.json` if unsure:
+```bash
+grep -E '"is_recompute"|"is_compact"' .leann/indexes/<name>/meta.json
+```
+- Built with `--recompute` → embedding server must be reachable at search time (iq).
+- Built with `--no-recompute` → embeddings already in the index; no server needed.
+
+#### Picking `top_k` + `complexity`
+
+| Goal | `top_k` | `complexity` |
+|---|---|---|
+| Quick lookup / agent tool call | 5 | 64 (default) |
+| Diversified retrieval before re-rank | 20-50 | 128 |
+| Exhaustive (rare — prefer brute-force via `prefilter="always"`) | 100+ | 256 |
+
+`complexity` is the ANN beam — larger = more candidates examined = slower but higher recall. Diminishing returns past 128 on HNSW.
+
+#### Hybrid weight (`gemma`)
+
+`gemma=1.0` (default) = pure vector. `gemma=0.0` = pure BM25. Mix:
+- **1.0** — semantic queries ("what did Jay say about X")
+- **0.7** — mostly semantic but you want exact terms to count (proper nouns, code symbols)
+- **0.3** — keyword-heavy queries with semantic safety net
+- **0.0** — exact-string / grep replacement
+
+#### Authoring a metadata filter — workflow
+
+1. **Inspect first** — `s.facets(["source_type", "author", "parent_ref"])` to see what values exist.
+2. **Write the filter** — `{"field": {"op": value}}`.
+3. **If zero results** — re-run with `explain_filters=True`, check `filter_matches`:
+   - `filter_matches == 0` → filter is wrong or corpus lacks that value.
+   - `filter_matches > 0` but `results == 0` → ANN missed them. Set `prefilter="always"`.
+4. **If one doc dominates** — add `diversify_by="source_document_id", max_per_group=2`.
+5. **If hits lack context** — add `context_window=1` (or use `s.expand_context(hit)` post-hoc).
+
+#### `prefilter` mode — when to override the default
+
+| Mode | When |
+|---|---|
+| `"auto"` (default) | Always start here. Routes to brute-force when selectivity <5%, ANN-postfilter otherwise. |
+| `"always"` | Filter matches are tiny *and* you want guaranteed coverage (compliance, single-thread retrieval). |
+| `"never"` | Restore pre-fork behavior (debugging, comparing to baseline LEANN). |
+
+#### Temporal — when `enable_temporal=True`
+
+Turn on if the query mentions time. The parser is permissive — leaving it on by default is fine; non-temporal queries are unaffected. Turn off only if you're feeding pre-templated queries where time tokens are literal (rare).
+
 ### When to use which kwarg
 
 **`prefilter="auto"` (default)** — **fixes sparse-filter false-zero**. If your filter matches <5% of the corpus, the searcher brute-force scores just the matching passages instead of ANN-then-postfilter. To restore pre-fork behavior: `prefilter="never"`.
