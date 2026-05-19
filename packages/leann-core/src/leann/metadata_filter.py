@@ -4,11 +4,22 @@ Metadata filtering engine for LEANN search results.
 This module provides generic metadata filtering capabilities that can be applied
 to search results from any LEANN backend. The filtering supports various
 operators for different data types including numbers, strings, booleans, and lists.
+
+Temporal metadata filters may target one of the canonical temporal axes:
+
+>>> sorted(TEMPORAL_AXES)
+['created_at', 'event_time', 'indexed_at', 'modified_at']
+>>> validate_temporal_axis("modified_at")
+'modified_at'
+>>> validate_temporal_axis("updated_at")
+Traceback (most recent call last):
+...
+ValueError: unsupported temporal axis: updated_at
 """
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, TypeAlias, Union, cast
 
 logger = logging.getLogger(__name__)
 _warned_naive_datetime = False
@@ -17,6 +28,20 @@ _warned_naive_datetime = False
 FilterValue = Union[str, int, float, bool, list]
 FilterSpec = dict[str, FilterValue]
 MetadataFilters = dict[str, FilterSpec]
+TemporalAxis: TypeAlias = Literal["created_at", "modified_at", "event_time", "indexed_at"]
+TEMPORAL_AXES: tuple[TemporalAxis, ...] = (
+    "created_at",
+    "modified_at",
+    "event_time",
+    "indexed_at",
+)
+
+
+def validate_temporal_axis(axis: str) -> TemporalAxis:
+    """Return a canonical temporal axis or raise for unsupported values."""
+    if axis not in TEMPORAL_AXES:
+        raise ValueError(f"unsupported temporal axis: {axis}")
+    return cast(TemporalAxis, axis)
 
 
 class MetadataFilterEngine:

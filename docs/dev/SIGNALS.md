@@ -13,8 +13,11 @@
 - **chunk** — a unit of text indexed by LEANN; carries a `text` body and a `metadata` dict (`SearchResult.metadata`, `packages/leann-core/src/leann/api.py:120-126`).
 - **reader** — a module under `apps/` or `packages/leann-core/src/leann/cli.py` that produces chunks from a source (Slack, email, code, calendar, browser).
 - **connector** — Wave 6+ component that reads chunks and materializes edges between them based on signals. Out of scope for Wave 1; the schema is designed for it.
-- **event_time** — when the underlying real-world event happened (message sent, commit authored, file created). Distinct from `indexed_at`.
+- **created_at** — when the underlying content was authored, sent, first visited, or created by the source system.
+- **modified_at** — when the underlying content was last changed by the source system.
+- **event_time** — when the underlying real-world or semantic event happened (message sent, calendar event start, commit authored). Distinct from `indexed_at`.
 - **indexed_at** — when LEANN ingested the chunk. Useful for "what's new in the index since X."
+- **temporal_axis** — the axis a temporal query targets. Valid values: `created_at`, `modified_at`, `event_time`, `indexed_at`.
 - **canonical** — UTC, ISO 8601 with `T` separator, second precision minimum (`2026-05-15T14:30:00+00:00` or `2026-05-15T14:30:00Z`).
 
 ---
@@ -25,11 +28,25 @@
 
 | Field | Type | Required | Example | Notes |
 |---|---|---|---|---|
-| `event_time` | ISO 8601 string, UTC | yes for time-bearing sources | `"2026-05-15T14:30:00+00:00"` | When the event happened in the real world. ALWAYS UTC. Naive datetimes are forbidden — reader MUST localize before serializing. |
+| `created_at` | ISO 8601 string, UTC | yes if knowable | `"2026-05-15T14:30:00+00:00"` | When the underlying thing was authored or created. Filesystem readers use `st_birthtime` on macOS, never `st_ctime`. ALWAYS UTC. |
+| `modified_at` | ISO 8601 string, UTC | yes if knowable and distinct | `"2026-05-16T09:15:00+00:00"` | Last source-level content change. Use the source's own modified/edited timestamp where available. ALWAYS UTC. |
+| `event_time` | ISO 8601 string, UTC | yes for time-bearing sources | `"2026-05-15T14:30:00+00:00"` | When the event happened semantically. Defaults to `created_at` for messages; differs for calendar starts, scheduled tasks, and dated docs. ALWAYS UTC. Naive datetimes are forbidden — reader MUST localize before serializing. |
 | `event_time_local` | ISO 8601 string with offset | optional | `"2026-05-15T10:30:00-04:00"` | If the local time matters (e.g., "morning vs evening"), include this in addition to `event_time`. Never as a substitute. |
 | `indexed_at` | ISO 8601 string, UTC | yes (stamped by `_build_index_from_documents`) | `"2026-05-15T18:00:00Z"` | Set automatically at ingest. Readers SHOULD NOT set this — the builder does. |
+| `temporal_axis` | enum string | no (query/filter diagnostics only) | `"modified_at"` | Valid values are `created_at`, `modified_at`, `event_time`, `indexed_at`. Stored chunks use the axis fields above; search diagnostics may report which axis was routed. |
 
 **Rule:** if a source has no meaningful event timestamp (e.g., a reference doc with no creation date), omit `event_time` entirely. Do not fabricate one from `indexed_at` — that breaks temporal queries silently.
+
+**Fallback rule:** production temporal search may route a query to one axis and fall back to adjacent axes when older chunks lack the routed field. Strict eval/tool calls can opt out. The canonical fallback order is:
+
+| Routed axis | Fallback order |
+|---|---|
+| `event_time` | `event_time` → `created_at` → `modified_at` |
+| `created_at` | `created_at` → `event_time` → `modified_at` |
+| `modified_at` | `modified_at` → `created_at` → `event_time` |
+| `indexed_at` | `indexed_at` only |
+
+If a reader must synthesize an axis because the source cannot distinguish it (for example, calendar `created_at` copied from `event_time`), it MUST also emit `<axis>_synthesized: true`.
 
 ### Identity / authorship
 
@@ -92,7 +109,7 @@
 ## Validation
 
 A `tests/test_signals_schema.py` test (Wave 1, atom 8) loads every reader's output for a 10-chunk sample and asserts:
-1. `event_time` parses as ISO 8601 with UTC offset if present
+1. `created_at`, `modified_at`, `event_time`, and `indexed_at` parse as ISO 8601 with UTC offset if present
 2. `source_type` is in the documented enum
 3. `activity_type` is in the documented enum if `author` is set
 4. `indexed_at` is set by the builder and is UTC ISO
