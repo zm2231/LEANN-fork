@@ -87,3 +87,10 @@ Tests:
 - `.venv/bin/pytest tests/test_calendar_event_time.py tests/test_signals_schema.py::test_calendar_chunks_follow_signals_schema` — 3 passed
 - `.venv/bin/pytest -k temporal` — 24 passed, 4 skipped, 425 deselected
 - `.venv/bin/ruff check packages/leann-core/src/leann/cli.py tests/test_calendar_event_time.py tests/test_signals_schema.py` — passed
+
+Atom 4: 5db0098 — `parse_temporal_query()` now routes temporal windows to `created_at`, `modified_at`, `event_time`, or `indexed_at` based on verb cues while returning a dict-compatible `TemporalFilter` that preserves Wave 1 call sites and exposes `.axis` / `.window` for Atom 5.
+
+Tests:
+- `.venv/bin/pytest tests/test_temporal_parser.py` — 37 passed
+- `.venv/bin/pytest -k temporal` — 44 passed, 4 skipped, 425 deselected
+- `.venv/bin/ruff check packages/leann-core/src/leann/temporal.py tests/test_temporal_parser.py` — passed
