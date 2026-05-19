@@ -109,3 +109,17 @@ Tests:
 - `.venv/bin/pytest tests/test_signals_schema.py` — 3 passed
 - `.venv/bin/pytest -k temporal` — 55 passed, 4 skipped, 425 deselected
 - `.venv/bin/ruff check apps/temporal_metadata.py apps/email_data/LEANN_email_reader.py apps/imessage_data/imessage_reader.py apps/history_data/history.py apps/history_data/wechat_history.py apps/chatgpt_data/chatgpt_reader.py apps/claude_data/claude_reader.py scripts/build_eval_corpus.py tests/test_reader_temporal_axes.py tests/test_signals_schema.py` — passed
+
+Atom 7: 054b3a9 — added the context-layer temporal corpus builder and generated the 50-row agent-style gold file. The builder stages `/Volumes/4/GitHub/context-layer` over Tailscale from `100.70.176.74`, excludes live service/runtime directories, emits filesystem `created_at` from `st_birthtime` and `modified_at` from `st_mtime`, omits filesystem `event_time`, builds HNSW with `BAAI/bge-m3` via iq, annotates index `meta.json` with all four temporal axes, and validates passage metadata after build.
+
+Build evidence:
+- `curl -sf http://100.122.112.83:8100/v1/models` — passed; endpoint advertised `BAAI/bge-m3`
+- `.venv/bin/python scripts/build_context_layer_temporal.py` — collected 6,622 chunks from `/private/tmp/context-layer-temporal-src`; built `.leann/indexes/context-layer-temporal/documents.leann`
+- `tests/eval/context_layer_temporal_gold.jsonl` — 50 rows; 40 non-adversarial, 10 adversarial
+- `.leann/indexes/context-layer-temporal/documents.leann.meta.json` — `metadata_temporal_axes`: `created_at`, `modified_at`, `event_time`, `indexed_at`
+
+Tests:
+- `.venv/bin/pytest tests/test_context_layer_temporal_build.py` — 3 passed
+- `.venv/bin/python scripts/build_context_layer_temporal.py --validate-gold-only` — passed
+- `.venv/bin/pytest -k temporal` — 58 passed, 4 skipped, 425 deselected
+- `.venv/bin/ruff check scripts/build_context_layer_temporal.py tests/test_context_layer_temporal_build.py` — passed
