@@ -127,6 +127,60 @@ leann remove my-docs       # local first, then global
 - `--force` / `-f` — full rebuild (otherwise incremental)
 - `--num-threads N` — parallelism
 
+## Decision guide
+
+Deeper reference: `docs/dev/DECISIONS-INDEX.md`.
+
+### Backend (default is HNSW — don't change unless one of these applies)
+
+| Use | When |
+|---|---|
+| **HNSW** (default) | Static or append-only corpus, fits in RAM. 95% of cases. |
+| **IVF** | Need true in-place add **and remove** without rebuild (e.g. live-syncing Slack/email where messages get edited or deleted). FAISS IVF + DirectMap.Hashtable. |
+| **DiskANN** | Corpus much larger than RAM (10M+ chunks). Slower build, larger on-disk graph, but searchable from disk. |
+
+### `--recompute` vs `--no-recompute` (this is THE LEANN tradeoff)
+
+LEANN's value prop: store a pruned graph + recompute embeddings on demand → ~97% storage reduction vs storing all vectors.
+
+| Mode | What's stored | Search latency | Storage | When to use |
+|---|---|---|---|---|
+| `--recompute` (default for HNSW build) | Graph only; embeddings recomputed via ZMQ embedding server during search | Higher (embedding compute on hot path) | **Tiny** | Big corpora, disk-constrained, you have a fast embedding server (iq). **Default for HNSW.** |
+| `--no-recompute` | Graph + all passage embeddings | Low (no recompute) | Large | Small corpus (<100k chunks), or no embedding server available at search time, or latency-critical UI. |
+
+Build flag and search flag **must match**. Mismatched search will error or silently return garbage.
+
+### `--compact` (HNSW only)
+
+Strips per-passage embeddings post-build and freezes the graph. Even smaller on disk, but **read-only** (no `update_index`, no `--force`-less rebuild). Use for archived corpora you'll never touch again. Skip otherwise.
+
+### Chunk size
+
+Default `--doc-chunk-size 256 --doc-chunk-overlap 128` (tokens) is right for prose. Bump for these:
+
+| Corpus | Suggested |
+|---|---|
+| Long-form essays, books | 512 / 128 |
+| Slack/chat (short messages) | Use the dedicated `index-*` reader — chunks are message-grouped, not token-sliced |
+| Tables / structured data | 256 / 0 (no overlap, rows are atomic) |
+| Code | Prefer `--use-ast-chunking` (function/class boundaries). Falls back to `--code-chunk-size 512 / --code-chunk-overlap 50`. |
+
+### AST chunking — when
+
+- ✅ Python, Java, C#, TS/TSX/JS (astchunk-supported languages)
+- ❌ Other languages — falls back silently to traditional. Pointless flag.
+- Verify after build: `cat .leann/indexes/<name>/meta.json | grep ast` — should show `"use_ast_chunking": true`.
+
+### Embedding prompt template (asymmetric models)
+
+| Model | Need prompt template? |
+|---|---|
+| `BAAI/bge-m3` | No (default iq model — skip the flag) |
+| `Qwen3-Embedding-*` | **Yes** — `--embedding-prompt-template "passage: " --query-prompt-template "query: "` |
+| `intfloat/e5-*` | Yes — same shape, different prefixes |
+
+If unsure, check the model card. Using wrong prompts silently degrades recall ~10-20%.
+
 ## Wave 1 / Wave 2 specifics
 
 **SIGNALS metadata** — for any custom reader, emit chunks with these reserved fields:
