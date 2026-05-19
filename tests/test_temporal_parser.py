@@ -1,14 +1,17 @@
 from datetime import datetime, timezone
 
+import pytest
 from leann.temporal import parse_temporal_query
 
 NOW = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
 
 
-def assert_range(query, expected_query, start, end):
+def assert_range(query, expected_query, start, end, axis="event_time"):
     stripped, filters = parse_temporal_query(query, NOW)
     assert stripped == expected_query
-    assert filters == {"event_time": {">=": start, "<=": end}}
+    assert filters == {axis: {">=": start, "<=": end}}
+    assert filters.axis == axis
+    assert filters.window == {">=": start, "<=": end}
 
 
 def test_hours_ago():
@@ -62,6 +65,7 @@ def test_last_month():
         "docs changed",
         "2026-04-01T00:00:00+00:00",
         "2026-04-30T23:59:59.999999+00:00",
+        axis="modified_at",
     )
 
 
@@ -154,3 +158,36 @@ def test_around_date():
         "2026-01-01T00:00:00+00:00",
         "2026-01-07T23:59:59.999999+00:00",
     )
+
+
+@pytest.mark.parametrize(
+    ("query", "axis"),
+    [
+        ("files I created last week", "created_at"),
+        ("docs I authored last week", "created_at"),
+        ("message I sent yesterday", "created_at"),
+        ("notes I wrote today", "created_at"),
+        ("drafts I made last month", "created_at"),
+        ("proposal drafted in January", "created_at"),
+        ("docs edited yesterday", "modified_at"),
+        ("files modified last week", "modified_at"),
+        ("notes updated today", "modified_at"),
+        ("docs changed last month", "modified_at"),
+        ("plan amended in January", "modified_at"),
+        ("file touched yesterday", "modified_at"),
+        ("meetings happening tomorrow", "event_time"),
+        ("launch scheduled last week", "event_time"),
+        ("discussion during last week", "event_time"),
+        ("event starting tomorrow", "event_time"),
+        ("incident occurred yesterday", "event_time"),
+        ("what was added to the index today", "indexed_at"),
+        ("docs indexed yesterday", "indexed_at"),
+        ("records ingested last month", "indexed_at"),
+    ],
+)
+def test_axis_routing_cases(query, axis):
+    _stripped, filters = parse_temporal_query(query, NOW)
+
+    assert filters is not None
+    assert filters.axis == axis
+    assert list(filters) == [axis]
