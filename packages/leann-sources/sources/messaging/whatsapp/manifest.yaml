@@ -1,0 +1,84 @@
+name: whatsapp
+category: messaging
+display_name: WhatsApp
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.WhatsAppReader
+data:
+  type: sqlite
+  default_path: ~/Library/Application Support/WhatsApp/ChatStorage.sqlite
+  permissions:
+    - WhatsApp chat databases are usually available from an iOS backup, not directly from the device.
+  query: |
+    SELECT
+      m.Z_PK AS message_id,
+      m.ZTEXT AS text,
+      m.ZMESSAGEDATE AS message_date,
+      m.ZEDITEDDATE AS edited_date,
+      m.ZISFROMME AS is_from_me,
+      COALESCE(m.ZFROMJID, '') AS from_jid,
+      COALESCE(m.ZCONTACTJID, '') AS contact_jid,
+      COALESCE(c.ZCONTACTJID, m.ZCONTACTJID, m.ZFROMJID, 'unknown') AS chat_jid,
+      COALESCE(c.ZPARTNERNAME, c.ZGROUPNAME, c.ZCONTACTJID, 'Unknown Chat') AS chat_name,
+      ('whatsapp_chat:' || COALESCE(c.Z_PK, m.ZCHATSESSION, 0)) AS source_document_id,
+      ('whatsapp_message:' || m.Z_PK) AS source_id,
+      CASE
+        WHEN m.ZISFROMME = 1 THEN 'You'
+        ELSE COALESCE(m.ZFROMJID, m.ZCONTACTJID, 'Unknown')
+      END AS sender,
+      COALESCE(m.ZFROMJID, m.ZCONTACTJID, c.ZCONTACTJID, '') AS participant_handles
+    FROM ZWAMESSAGE m
+    LEFT JOIN ZWACHATSESSION c ON m.ZCHATSESSION = c.Z_PK
+    WHERE m.ZTEXT IS NOT NULL AND m.ZTEXT != ''
+    ORDER BY c.Z_PK, m.ZMESSAGEDATE
+  count_query: |
+    SELECT COUNT(*) FROM ZWAMESSAGE WHERE ZTEXT IS NOT NULL AND ZTEXT != ''
+auth:
+  type: none
+fields:
+  created_at:
+    source: message_date
+    transform: core_data_epoch_to_utc_iso
+    synthesized_from: event_time
+  modified_at:
+    source: modified_date
+    transform: core_data_epoch_to_utc_iso
+  event_time:
+    source: message_date
+    transform: core_data_epoch_to_utc_iso
+  author:
+    source: sender
+  activity_type:
+    value: authored
+  participant_ids:
+    source: participant_handles
+    transform: list_of_handles
+  source_type:
+    value: whatsapp
+  source_id:
+    source: source_id
+  source_document_id:
+    source: source_document_id
+  chunk_seq:
+    auto: row_index_within_source_document_id
+  parent_ref:
+    source: source_document_id
+  mentioned_urls:
+    extraction: regex
+    source: text
+    pattern: https?://[^\s>]+
+chunking:
+  granularity: message
+  text_template: |
+    WhatsApp message from {sender} in chat "{chat_name}"
+    Content: {text}
+privacy:
+  tier: tier_3
+  participant_consent_required: true
+  content_excluded_in:
+    - profile_shareable
+connectors:
+  cross_source_match_by:
+    - mentioned_urls
+    - participant_ids
+  event_id_strategy: synthetic_thread_hash
