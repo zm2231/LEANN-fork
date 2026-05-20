@@ -3133,15 +3133,13 @@ Examples:
 
     async def index_chatgpt(self, args):
         """Index ChatGPT export data."""
-        from apps.chatgpt_data.chatgpt_reader import ChatGPTReader
-
-        reader = ChatGPTReader(concatenate_conversations=True)
-        docs = reader.load_data(
-            input_dir=args.export_path,
-            max_count=args.max_count,
+        print(
+            "Deprecated: use `leann index --source chatgpt-export` instead of `leann index-chatgpt`."
         )
-        print(f"Loaded {len(docs)} ChatGPT conversations")
-        await self._build_index_from_documents(args, docs)
+        args.command = "index"
+        args.source = "chatgpt-export"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-chatgpt`")
 
     async def index_claude(self, args):
         """Index Claude export data."""
