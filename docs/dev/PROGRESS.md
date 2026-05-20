@@ -123,3 +123,23 @@ Tests:
 - `.venv/bin/python scripts/build_context_layer_temporal.py --validate-gold-only` — passed
 - `.venv/bin/pytest -k temporal` — 58 passed, 4 skipped, 425 deselected
 - `.venv/bin/ruff check scripts/build_context_layer_temporal.py tests/test_context_layer_temporal_build.py` — passed
+
+Atom 8: 971f79b — `scripts/eval_temporal.py --multi-axis` now runs Wave 1 temporal gold and the context-layer temporal gold side by side, including baseline/treatment summaries, non-adversarial recall, context `source_id` matching, and hybrid treatment (`gemma=0.7`) for the acceptance path. The context builder now prefixes indexed text with the relative path and writes file-level gold IDs, making path/file style agent queries evaluable. Wave 1 eval corpus builds now use `LEANN_EVAL_EMBEDDING_BASE_URL` with the verified iq endpoint default.
+
+Build/eval evidence:
+- `.venv/bin/python scripts/build_eval_corpus.py --force` — rebuilt Wave 1 indexes: eval-docs 3,505 chunks; eval-commits 1,265 chunks; eval-slack 14,419 chunks; eval-summaries 3,457 chunks
+- `.venv/bin/python scripts/build_context_layer_temporal.py` — rebuilt context index with path-prefixed text; collected 6,795 chunks
+- `.venv/bin/python scripts/eval_temporal.py --multi-axis`:
+
+| dataset | mode | rows | precision@5 | recall@5 | mrr | non-adversarial recall@5 |
+|---|---|---:|---:|---:|---:|---:|
+| temporal_gold | baseline | 22 | 0.11 | 0.36 | 0.31 | 0.36 |
+| context_layer_temporal_gold | baseline | 50 | 0.13 | 0.64 | 0.45 | 0.75 |
+| temporal_gold | treatment | 22 | 0.25 | 0.77 | 0.59 | 0.77 |
+| context_layer_temporal_gold | treatment | 50 | 0.78 | 1.00 | 1.00 | 1.00 |
+
+Tests:
+- `.venv/bin/pytest tests/test_eval_temporal.py tests/test_context_layer_temporal_build.py` — 6 passed
+- `.venv/bin/python scripts/build_context_layer_temporal.py --validate-gold-only` — passed
+- `.venv/bin/pytest -k temporal` — 65 passed, 425 deselected (rerun with network escalation after sandbox-only endpoint denial)
+- `.venv/bin/ruff check scripts/eval_temporal.py scripts/build_eval_corpus.py scripts/build_context_layer_temporal.py tests/test_eval_temporal.py tests/test_context_layer_temporal_build.py` — passed
