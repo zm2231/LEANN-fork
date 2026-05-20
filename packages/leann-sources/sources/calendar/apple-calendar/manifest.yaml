@@ -1,0 +1,38 @@
+name: apple-calendar
+category: calendar
+display_name: Apple Calendar
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.AppleCalendarReader
+data:
+  type: sqlite
+  default_path: ~/Library/Calendars/Calendar Cache
+  permissions:
+    - Full Disk Access may be required for ~/Library/Calendars.
+auth:
+  type: none
+fields:
+  created_at:
+    source: created_at
+    synthesized_from: event_time
+  modified_at:
+    source: modified_at
+    synthesized_from: event_time
+  event_time:
+    source: event_time
+  event_time_local:
+    source: event_time_local
+  source_type:
+    value: calendar
+  source_id:
+    source: event_id
+    transform: format('{value}')
+  source_document_id:
+    source: event_id
+    transform: format('{value}')
+  chunk_seq:
+    auto: row_index_within_source_document_id
+chunking:
+  granularity: event
+privacy:
+  tier: tier_2

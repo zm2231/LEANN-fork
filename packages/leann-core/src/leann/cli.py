@@ -3109,113 +3109,13 @@ Examples:
 
     async def index_calendar(self, args):
         """Index Apple Calendar events."""
-        import shutil
-        import sqlite3
-
-        from llama_index.core import Document
-
-        docs = []
-        calendar_cache = Path.home() / "Library/Calendars/Calendar Cache"
-        if not calendar_cache.exists():
-            print("Apple Calendar Cache not found.")
-            return
-
-        temp_db = "/tmp/leann_calendar_index_copy"
-        try:
-            shutil.copy2(calendar_cache, temp_db)
-            conn = sqlite3.connect(temp_db)
-            cursor = conn.cursor()
-            cursor.execute("PRAGMA table_info(CI_EVENT)")
-            columns = {row[1] for row in cursor.fetchall()}
-            created_at_expr = _calendar_timestamp_expr(
-                columns,
-                (
-                    "created_date",
-                    "creation_date",
-                    "date_created",
-                    "created",
-                    "creation_time",
-                ),
-            )
-            modified_at_expr = _calendar_timestamp_expr(
-                columns,
-                (
-                    "last_modified_date",
-                    "last_modified",
-                    "modified_date",
-                    "date_modified",
-                    "updated_date",
-                    "updated",
-                ),
-            )
-            cursor.execute(
-                f"""
-                SELECT rowid as event_id, summary, description, location,
-                       datetime(start_date + 978307200, 'unixepoch') as event_time,
-                       datetime(start_date + 978307200, 'unixepoch', 'localtime') as event_time_local,
-                       datetime(end_date + 978307200, 'unixepoch', 'localtime') as end_time_local,
-                       {created_at_expr} as created_at,
-                       {modified_at_expr} as modified_at
-                FROM CI_EVENT ORDER BY start_date DESC LIMIT ?
-                """,
-                (args.max_count,),
-            )
-            for (
-                event_id,
-                summary,
-                description,
-                location,
-                event_time,
-                event_time_local,
-                end_time_local,
-                created_at,
-                modified_at,
-            ) in cursor.fetchall():
-                if not summary:
-                    continue
-                event_time_iso = (
-                    datetime.fromisoformat(event_time).replace(tzinfo=timezone.utc).isoformat()
-                )
-                event_time_local_iso = (
-                    datetime.fromisoformat(event_time_local).astimezone().isoformat()
-                )
-                created_at_iso = (
-                    datetime.fromisoformat(created_at).replace(tzinfo=timezone.utc).isoformat()
-                    if created_at
-                    else event_time_iso
-                )
-                modified_at_iso = (
-                    datetime.fromisoformat(modified_at).replace(tzinfo=timezone.utc).isoformat()
-                    if modified_at
-                    else event_time_iso
-                )
-                text = (
-                    f"Event: {summary}\nStart: {event_time_local_iso}\nEnd: {end_time_local}\n"
-                    f"Location: {location or ''}\nDescription: {description or ''}"
-                )
-                docs.append(
-                    Document(
-                        text=text,
-                        metadata={
-                            "event": summary,
-                            "source_type": "calendar",
-                            "source_id": str(event_id),
-                            "event_time": event_time_iso,
-                            "event_time_local": event_time_local_iso,
-                            "created_at": created_at_iso,
-                            "modified_at": modified_at_iso,
-                            "created_at_synthesized": created_at is None,
-                            "modified_at_synthesized": modified_at is None,
-                        },
-                    )
-                )
-            conn.close()
-        except Exception as e:
-            print(f"Error reading Apple Calendar: {e}")
-        finally:
-            if os.path.exists(temp_db):
-                os.remove(temp_db)
-        await self._build_index_from_documents(args, docs)
+        print(
+            "Deprecated: use `leann index --source apple-calendar` instead of `leann index-calendar`."
+        )
+        args.command = "index"
+        args.source = "apple-calendar"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-calendar`")
 
     async def index_imessage(self, args):
         """Index iMessage conversations."""
