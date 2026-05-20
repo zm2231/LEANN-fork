@@ -43,18 +43,19 @@ class AppleCalendarReader(SQLiteSourceReader):
                 record["event_time"] = self._utc_iso(record["event_time"])
                 record["event_time_local"] = self._local_iso(record["event_time_local"])
                 record["end_time_local"] = self._local_iso(record["end_time_local"])
-                record["created_at"] = (
-                    self._utc_iso(record.get("created_at")) or record["event_time"]
-                )
-                record["modified_at"] = (
-                    self._utc_iso(record.get("modified_at")) or record["event_time"]
-                )
-                yield self._chunk_from_record(
+                created_at = self._utc_iso(record.get("created_at"))
+                modified_at = self._utc_iso(record.get("modified_at"))
+                record["created_at"] = created_at or record["event_time"]
+                record["modified_at"] = modified_at or record["event_time"]
+                chunk = self._chunk_from_record(
                     record,
                     row_index=row_index,
                     text=self._render_calendar_text(record),
                     document_counts=document_counts,
                 )
+                chunk.metadata["created_at_synthesized"] = created_at is None
+                chunk.metadata["modified_at_synthesized"] = modified_at is None
+                yield chunk
 
     def stats(self) -> SourceStats:
         if not self.path.exists():

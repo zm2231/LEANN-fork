@@ -228,7 +228,7 @@ Reserved metadata fields (use these names in your readers):
 - `participant_ids` — list of all participants
 
 **Source:**
-- `source_type` — enum (`document`, `git_commit`, `slack`, `daily_summary`, `email`, `imessage`, `browser_history`, `calendar`, `code`, `voice_memo`, `journal`, `notion`)
+- `source_type` — enum (`document`, `git_commit`, `slack`, `daily_summary`, `email`, `imessage`, `browser_history`, `calendar`, `chatgpt`, `claude`, `wechat`, `code`, `voice_memo`, `journal`, `notion`)
 - `source_id` — stable per-source identifier
 - `source_url` — deep link
 - `project_id` — repo/scope

@@ -14,10 +14,8 @@ auth:
 fields:
   created_at:
     source: created_at
-    synthesized_from: event_time
   modified_at:
     source: modified_at
-    synthesized_from: event_time
   event_time:
     source: event_time
   event_time_local:

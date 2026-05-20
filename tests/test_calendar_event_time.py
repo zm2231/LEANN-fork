@@ -1,98 +1,65 @@
-import argparse
-import asyncio
-from datetime import datetime
+import sqlite3
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from leann.cli import LeannCLI
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "packages" / "leann-sources" / "src"))
+
+from leann_sources.cli import SourceCLI  # noqa: E402
+from leann_sources.manifest import SourceManifest  # noqa: E402
 
 
-class FakeCursor:
-    def __init__(self):
-        self.query = ""
-
-    def execute(self, query, _params=None):
-        self.query = query
-        return None
-
-    def fetchall(self):
-        if "PRAGMA table_info" in self.query:
-            return [
-                (0, "created_date", "REAL", 0, None, 0),
-                (1, "last_modified_date", "REAL", 0, None, 0),
-            ]
-        return [
-            (
-                123,
-                "Temporal planning",
-                "Discuss calendar metadata",
-                "Conference room",
-                "2026-05-15 14:30:00",
-                "2026-05-15 10:30:00",
-                "2026-05-15 11:00:00",
-                "2026-05-10 12:00:00",
-                "2026-05-12 13:00:00",
-            )
-        ]
+def _core_data_seconds(value: datetime) -> float:
+    core_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+    return value.timestamp() - core_epoch.timestamp()
 
 
-class FakeConnection:
-    def cursor(self):
-        return FakeCursor()
-
-    def close(self):
-        return None
-
-
-class SparseFakeCursor(FakeCursor):
-    def fetchall(self):
-        if "PRAGMA table_info" in self.query:
-            return []
-        return [
-            (
-                123,
-                "Temporal planning",
-                "Discuss calendar metadata",
-                "Conference room",
-                "2026-05-15 14:30:00",
-                "2026-05-15 10:30:00",
-                "2026-05-15 11:00:00",
-                None,
-                None,
-            )
-        ]
+def _load_calendar_metadata(cache: Path):
+    sources_root = ROOT / "packages" / "leann-sources" / "sources"
+    manifest = SourceManifest.load(sources_root / "calendar" / "apple-calendar" / "manifest.yaml")
+    manifest.data["default_path"] = str(cache)
+    chunks = list(SourceCLI(sources_root).reader_for(manifest).iter_chunks())
+    assert len(chunks) == 1
+    return chunks[0].metadata
 
 
-class SparseFakeConnection:
-    def cursor(self):
-        return SparseFakeCursor()
+def test_calendar_reader_emits_event_time_and_source_type(tmp_path):
+    calendar_cache = tmp_path / "Calendar Cache"
+    conn = sqlite3.connect(calendar_cache)
+    conn.executescript(
+        """
+        CREATE TABLE CI_EVENT (
+            summary TEXT,
+            description TEXT,
+            location TEXT,
+            start_date REAL,
+            end_date REAL,
+            created_date REAL,
+            last_modified_date REAL
+        );
+        """
+    )
+    start = datetime(2026, 5, 15, 14, 30, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 15, 15, 0, tzinfo=timezone.utc)
+    created = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    modified = datetime(2026, 5, 12, 13, 0, tzinfo=timezone.utc)
+    conn.execute(
+        "INSERT INTO CI_EVENT VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "Temporal planning",
+            "Discuss calendar metadata",
+            "Conference room",
+            _core_data_seconds(start),
+            _core_data_seconds(end),
+            _core_data_seconds(created),
+            _core_data_seconds(modified),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
-    def close(self):
-        return None
-
-
-def test_calendar_reader_emits_event_time_and_source_type(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    calendar_cache = home / "Library" / "Calendars" / "Calendar Cache"
-    calendar_cache.parent.mkdir(parents=True)
-    calendar_cache.write_text("sqlite placeholder", encoding="utf-8")
-
-    monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setattr("shutil.copy2", lambda _src, _dst: None)
-    monkeypatch.setattr("sqlite3.connect", lambda _path: FakeConnection())
-
-    captured = {}
-
-    async def fake_build(_args, docs):
-        captured["docs"] = docs
-
-    cli = LeannCLI()
-    cli._build_index_from_documents = fake_build
-
-    asyncio.run(cli.index_calendar(argparse.Namespace(max_count=1)))
-
-    docs = captured["docs"]
-    assert len(docs) == 1
-    metadata = docs[0].metadata
+    metadata = _load_calendar_metadata(calendar_cache)
     event_time = datetime.fromisoformat(metadata["event_time"])
     created_at = datetime.fromisoformat(metadata["created_at"])
     modified_at = datetime.fromisoformat(metadata["modified_at"])
@@ -101,7 +68,7 @@ def test_calendar_reader_emits_event_time_and_source_type(tmp_path, monkeypatch)
     assert created_at.tzinfo is not None
     assert modified_at.tzinfo is not None
     assert metadata["source_type"] == "calendar"
-    assert metadata["source_id"] == "123"
+    assert metadata["source_id"] == "1"
     assert metadata["created_at"] == "2026-05-10T12:00:00+00:00"
     assert metadata["modified_at"] == "2026-05-12T13:00:00+00:00"
     assert metadata["created_at_synthesized"] is False
@@ -109,27 +76,36 @@ def test_calendar_reader_emits_event_time_and_source_type(tmp_path, monkeypatch)
     assert "start" not in metadata
 
 
-def test_calendar_reader_marks_synthesized_axes_when_source_lacks_columns(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    calendar_cache = home / "Library" / "Calendars" / "Calendar Cache"
-    calendar_cache.parent.mkdir(parents=True)
-    calendar_cache.write_text("sqlite placeholder", encoding="utf-8")
+def test_calendar_reader_marks_synthesized_axes_when_source_lacks_columns(tmp_path):
+    calendar_cache = tmp_path / "Calendar Cache"
+    conn = sqlite3.connect(calendar_cache)
+    conn.executescript(
+        """
+        CREATE TABLE CI_EVENT (
+            summary TEXT,
+            description TEXT,
+            location TEXT,
+            start_date REAL,
+            end_date REAL
+        );
+        """
+    )
+    start = datetime(2026, 5, 15, 14, 30, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 15, 15, 0, tzinfo=timezone.utc)
+    conn.execute(
+        "INSERT INTO CI_EVENT VALUES (?, ?, ?, ?, ?)",
+        (
+            "Temporal planning",
+            "Discuss calendar metadata",
+            "Conference room",
+            _core_data_seconds(start),
+            _core_data_seconds(end),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
-    monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setattr("shutil.copy2", lambda _src, _dst: None)
-    monkeypatch.setattr("sqlite3.connect", lambda _path: SparseFakeConnection())
-
-    captured = {}
-
-    async def fake_build(_args, docs):
-        captured["docs"] = docs
-
-    cli = LeannCLI()
-    cli._build_index_from_documents = fake_build
-
-    asyncio.run(cli.index_calendar(argparse.Namespace(max_count=1)))
-
-    metadata = captured["docs"][0].metadata
+    metadata = _load_calendar_metadata(calendar_cache)
     assert metadata["created_at"] == metadata["event_time"]
     assert metadata["modified_at"] == metadata["event_time"]
     assert metadata["created_at_synthesized"] is True

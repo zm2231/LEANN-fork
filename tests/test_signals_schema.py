@@ -1,4 +1,3 @@
-import argparse
 import asyncio
 import importlib.util
 import json
@@ -21,6 +20,9 @@ SOURCE_TYPES = {
     "imessage",
     "browser_history",
     "calendar",
+    "chatgpt",
+    "claude",
+    "wechat",
     "code",
     "voice_memo",
     "journal",
@@ -142,66 +144,56 @@ def test_git_commit_chunks_from_eval_builder_follow_signals_schema(tmp_path, mon
         _assert_signals_metadata(metadata)
 
 
-class FakeCursor:
-    def __init__(self):
-        self.query = ""
-
-    def execute(self, query, _params=None):
-        self.query = query
-        return None
-
-    def fetchall(self):
-        if "PRAGMA table_info" in self.query:
-            return [
-                (0, "created_date", "REAL", 0, None, 0),
-                (1, "last_modified_date", "REAL", 0, None, 0),
-            ]
-        return [
-            (
-                123,
-                "Temporal planning",
-                "Discuss calendar metadata",
-                "Conference room",
-                "2026-05-15 14:30:00",
-                "2026-05-15 10:30:00",
-                "2026-05-15 11:00:00",
-                "2026-05-10 12:00:00",
-                "2026-05-12 13:00:00",
-            )
-        ]
+def _core_data_seconds(value: datetime) -> float:
+    core_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+    return value.timestamp() - core_epoch.timestamp()
 
 
-class FakeConnection:
-    def cursor(self):
-        return FakeCursor()
+def test_calendar_chunks_follow_signals_schema(tmp_path):
+    from leann_sources.cli import SourceCLI
+    from leann_sources.manifest import SourceManifest
 
-    def close(self):
-        return None
-
-
-def test_calendar_chunks_follow_signals_schema(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    calendar_cache = home / "Library" / "Calendars" / "Calendar Cache"
-    calendar_cache.parent.mkdir(parents=True)
-    calendar_cache.write_text("sqlite placeholder", encoding="utf-8")
-
-    monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setattr("shutil.copy2", lambda _src, _dst: None)
-    monkeypatch.setattr("sqlite3.connect", lambda _path: FakeConnection())
-
-    captured = {}
-
-    async def capture_build(_args, docs):
-        captured["docs"] = docs
-
-    cli = LeannCLI()
-    cli._build_index_from_documents = capture_build
-
-    asyncio.run(cli.index_calendar(argparse.Namespace(max_count=1)))
-
-    metadata_rows = asyncio.run(
-        _build_and_read_metadata(tmp_path, "signals-calendar", captured["docs"])
+    calendar_cache = tmp_path / "Calendar Cache"
+    conn = sqlite3.connect(calendar_cache)
+    conn.executescript(
+        """
+        CREATE TABLE CI_EVENT (
+            summary TEXT,
+            description TEXT,
+            location TEXT,
+            start_date REAL,
+            end_date REAL,
+            created_date REAL,
+            last_modified_date REAL
+        );
+        """
     )
+    start = datetime(2026, 5, 15, 14, 30, tzinfo=timezone.utc)
+    end = datetime(2026, 5, 15, 15, 0, tzinfo=timezone.utc)
+    created = datetime(2026, 5, 10, 12, 0, tzinfo=timezone.utc)
+    modified = datetime(2026, 5, 12, 13, 0, tzinfo=timezone.utc)
+    conn.execute(
+        "INSERT INTO CI_EVENT VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            "Temporal planning",
+            "Discuss calendar metadata",
+            "Conference room",
+            _core_data_seconds(start),
+            _core_data_seconds(end),
+            _core_data_seconds(created),
+            _core_data_seconds(modified),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    sources_root = ROOT / "packages" / "leann-sources" / "sources"
+    manifest = SourceManifest.load(sources_root / "calendar" / "apple-calendar" / "manifest.yaml")
+    manifest.data["default_path"] = str(calendar_cache)
+    chunks = list(SourceCLI(sources_root).reader_for(manifest).iter_chunks())
+    documents = [Document(text=chunk.text, metadata=chunk.metadata) for chunk in chunks]
+
+    metadata_rows = asyncio.run(_build_and_read_metadata(tmp_path, "signals-calendar", documents))
 
     assert metadata_rows
     for metadata in metadata_rows:
