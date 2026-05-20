@@ -154,7 +154,7 @@ def build_documents(source_root: Path) -> list[Document]:
             source_id = f"{relative}#chunk-{chunk_index}"
             documents.append(
                 Document(
-                    text=chunk,
+                    text=f"Path: {relative}\n\n{chunk}",
                     metadata={
                         "source_type": "context_layer",
                         "source_id": source_id,
@@ -183,8 +183,12 @@ def validate_documents(documents: list[Document]) -> None:
 
 
 def gold_rows(documents: list[Document]) -> list[dict[str, Any]]:
-    ids = [doc.metadata["source_id"] for doc in documents]
-    selected = ids[:50]
+    ids_by_parent: dict[str, list[str]] = {}
+    for doc in documents:
+        source_id = doc.metadata["source_id"]
+        parent = source_id.split("#chunk-", 1)[0]
+        ids_by_parent.setdefault(parent, []).append(source_id)
+    selected = [doc.metadata["source_id"] for doc in documents[:50]]
     if len(selected) < 50:
         raise SystemExit(f"Need at least 50 chunks for gold, found {len(selected)}")
 
@@ -200,12 +204,14 @@ def gold_rows(documents: list[Document]) -> list[dict[str, Any]]:
     for index, (axis, verb, bucket) in enumerate(buckets):
         source_id = selected[index]
         parent = source_id.split("#chunk-", 1)[0]
+        gold_ids = ids_by_parent[parent]
         rows.append(
             {
                 "query": f"{parent} {verb} in May",
                 "axis_expected": axis,
                 "window_expected": ["2026-05-01T00:00:00+00:00", "2026-05-31T23:59:59+00:00"],
-                "gold_ids": [source_id],
+                "gold_ids": gold_ids,
+                "expected_min_results": 1,
                 "bucket": bucket,
                 "now": TEMPORAL_NOW,
             }
