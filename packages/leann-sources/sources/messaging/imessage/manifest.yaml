@@ -1,0 +1,73 @@
+name: imessage
+category: messaging
+display_name: iMessage
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.IMessageReader
+data:
+  type: sqlite
+  default_path: ~/Library/Messages/chat.db
+  permissions:
+    - Full Disk Access may be required for ~/Library/Messages/chat.db.
+  query: |
+    SELECT
+      m.ROWID AS message_id,
+      m.text,
+      m.date,
+      m.date_edited,
+      m.is_from_me,
+      COALESCE(m.service, 'iMessage') AS service,
+      COALESCE(c.chat_identifier, 'Unknown') AS chat_identifier,
+      COALESCE(c.display_name, 'Unknown Chat') AS chat_display_name,
+      COALESCE(h.id, 'Unknown') AS handle_id,
+      COALESCE(c.ROWID, 0) AS chat_id,
+      ('chat:' || COALESCE(c.ROWID, 0)) AS source_document_id,
+      ('message:' || m.ROWID) AS source_id,
+      CASE WHEN m.is_from_me = 1 THEN 'You' ELSE COALESCE(h.id, 'Unknown') END AS sender,
+      COALESCE(h.id, '') AS participant_handles
+    FROM message m
+    LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+    LEFT JOIN chat c ON cmj.chat_id = c.ROWID
+    LEFT JOIN handle h ON m.handle_id = h.ROWID
+    WHERE m.text IS NOT NULL AND m.text != ''
+    ORDER BY c.ROWID, m.date
+  count_query: |
+    SELECT COUNT(*) FROM message WHERE text IS NOT NULL AND text != ''
+auth:
+  type: none
+fields:
+  created_at:
+    source: date
+    transform: cocoa_ns_to_utc_iso
+    synthesized_from: event_time
+  modified_at:
+    source: date_edited
+    transform: cocoa_ns_to_utc_iso
+  event_time:
+    source: date
+    transform: cocoa_ns_to_utc_iso
+  source_type:
+    value: imessage
+  source_id:
+    source: source_id
+  source_document_id:
+    source: source_document_id
+  chunk_seq:
+    auto: row_index_within_source_document_id
+  parent_ref:
+    source: source_document_id
+  participant_ids:
+    source: participant_handles
+    transform: list_of_handles
+  mentioned_urls:
+    extraction: regex
+    source: text
+    pattern: https?://[^\s>]+
+chunking:
+  granularity: message
+  text_template: |
+    Message from {sender} in chat "{chat_display_name}"
+    Service: {service}
+    Content: {text}
+privacy:
+  tier: tier_1

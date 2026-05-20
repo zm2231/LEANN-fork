@@ -40,6 +40,7 @@ FIELD_NAMES = {
 TRANSFORM_NAMES = {
     "unix_to_utc_iso",
     "core_data_epoch_to_utc_iso",
+    "cocoa_ns_to_utc_iso",
     "webkit_epoch_to_utc_iso",
     "regex_extract",
     "format",

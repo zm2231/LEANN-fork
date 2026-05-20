@@ -3,7 +3,9 @@ import asyncio
 import importlib.util
 import json
 import re
-from datetime import datetime
+import sqlite3
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +29,7 @@ SOURCE_TYPES = {
 ACTIVITY_TYPES = {"authored", "received", "visited", "modified", "created"}
 FULL_DATETIME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "packages" / "leann-sources" / "src"))
 BUILD_EVAL_CORPUS_PATH = ROOT / "scripts" / "build_eval_corpus.py"
 spec = importlib.util.spec_from_file_location("build_eval_corpus", BUILD_EVAL_CORPUS_PATH)
 assert spec is not None
@@ -199,6 +202,58 @@ def test_calendar_chunks_follow_signals_schema(tmp_path, monkeypatch):
     metadata_rows = asyncio.run(
         _build_and_read_metadata(tmp_path, "signals-calendar", captured["docs"])
     )
+
+    assert metadata_rows
+    for metadata in metadata_rows:
+        _assert_signals_metadata(metadata)
+
+
+def _cocoa_ns(value: datetime) -> int:
+    cocoa_epoch = datetime(2001, 1, 1, tzinfo=timezone.utc)
+    return int((value.timestamp() - cocoa_epoch.timestamp()) * 1_000_000_000)
+
+
+def test_source_registry_imessage_chunks_follow_signals_schema(tmp_path):
+    from leann_sources.cli import SourceCLI
+    from leann_sources.manifest import SourceManifest
+
+    db_path = tmp_path / "chat.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE message (
+            ROWID INTEGER PRIMARY KEY,
+            text TEXT,
+            date INTEGER,
+            date_edited INTEGER,
+            is_from_me INTEGER,
+            service TEXT,
+            handle_id INTEGER
+        );
+        CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT);
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+        """
+    )
+    created = datetime(2026, 5, 12, 10, tzinfo=timezone.utc)
+    edited = datetime(2026, 5, 12, 11, tzinfo=timezone.utc)
+    conn.execute("INSERT INTO chat VALUES (1, 'chat-1', 'Chat One')")
+    conn.execute("INSERT INTO handle VALUES (1, '+15555550123')")
+    conn.execute(
+        "INSERT INTO message VALUES (1, 'hello temporal', ?, ?, 0, 'iMessage', 1)",
+        (_cocoa_ns(created), _cocoa_ns(edited)),
+    )
+    conn.execute("INSERT INTO chat_message_join VALUES (1, 1)")
+    conn.commit()
+    conn.close()
+
+    sources_root = ROOT / "packages" / "leann-sources" / "sources"
+    manifest = SourceManifest.load(sources_root / "messaging" / "imessage" / "manifest.yaml")
+    manifest.data["default_path"] = str(db_path)
+    chunks = list(SourceCLI(sources_root).reader_for(manifest).iter_chunks())
+    documents = [Document(text=chunk.text, metadata=chunk.metadata) for chunk in chunks]
+
+    metadata_rows = asyncio.run(_build_and_read_metadata(tmp_path, "signals-imessage", documents))
 
     assert metadata_rows
     for metadata in metadata_rows:

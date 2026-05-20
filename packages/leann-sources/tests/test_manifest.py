@@ -12,6 +12,7 @@ from leann_sources import Chunk, SourceManifest, SourceReader, get_plugin
 from leann_sources.manifest import ManifestValidationError, validate_manifest_dict
 from leann_sources.transforms import (
     core_data_epoch_to_utc_iso,
+    cocoa_ns_to_utc_iso,
     format,
     list_of_handles,
     regex_extract,
@@ -135,6 +136,7 @@ def test_public_exports_and_transforms():
     assert Chunk(text="hello", metadata={"source_type": "document"}).text == "hello"
     assert unix_to_utc_iso(0) == "1970-01-01T00:00:00+00:00"
     assert core_data_epoch_to_utc_iso(0) == "2001-01-01T00:00:00+00:00"
+    assert cocoa_ns_to_utc_iso(1_000_000_000) == "2001-01-01T00:00:01+00:00"
     assert webkit_epoch_to_utc_iso(0) == "1601-01-01T00:00:00+00:00"
     assert regex_extract("see https://example.com", r"https?://\S+") == ["https://example.com"]
     assert format("id_{value}", 7) == "id_7"

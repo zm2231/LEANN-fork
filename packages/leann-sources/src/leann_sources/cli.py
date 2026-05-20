@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +47,45 @@ class SourceCLI:
         index_parser.add_argument("name")
         index_parser.add_argument("index_name", nargs="?")
         index_parser.add_argument("--dry-run", action="store_true")
+        self._add_index_options(index_parser)
 
         unified_index = subparsers.add_parser("index", help="Index a registered source")
         unified_index.add_argument("--source", required=True)
         unified_index.add_argument("index_name", nargs="?")
         unified_index.add_argument("--dry-run", action="store_true")
+        self._add_index_options(unified_index)
 
-    def handle(self, args: argparse.Namespace) -> bool:
+    def _add_index_options(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "--embedding-model", type=str, default="facebook/contriever", help="Embedding model"
+        )
+        parser.add_argument(
+            "--embedding-mode",
+            type=str,
+            default="sentence-transformers",
+            choices=["sentence-transformers", "openai", "mlx", "ollama"],
+            help="Embedding backend",
+        )
+        parser.add_argument(
+            "--embedding-host", type=str, default=None, help="Ollama embedding host"
+        )
+        parser.add_argument(
+            "--embedding-api-base",
+            type=str,
+            default=None,
+            help="OpenAI-compatible embedding base URL",
+        )
+        parser.add_argument("--embedding-api-key", type=str, default=None, help="Embedding API key")
+        parser.add_argument(
+            "--max-count", type=int, default=1000, help="Max items to index (default: 1000)"
+        )
+        parser.add_argument(
+            "--no-recompute",
+            action="store_true",
+            help="Disable embedding recomputation (stores full embeddings)",
+        )
+
+    def handle(self, args: argparse.Namespace, core_cli: Any = None) -> bool | Any:
         if args.command == "sources":
             command = getattr(args, "sources_command", None)
             if command == "list":
@@ -65,13 +99,24 @@ class SourceCLI:
             elif command == "validate":
                 self.validate(args.name)
             elif command == "index":
-                self.index(args.name, index_name=args.index_name, dry_run=args.dry_run)
+                return self.index(
+                    args.name,
+                    index_name=args.index_name,
+                    dry_run=getattr(args, "dry_run", False),
+                    core_cli=core_cli,
+                    args=args,
+                )
             else:
                 raise SystemExit("missing sources subcommand")
             return True
         if args.command == "index" and getattr(args, "source", None):
-            self.index(args.source, index_name=args.index_name, dry_run=args.dry_run)
-            return True
+            return self.index(
+                args.source,
+                index_name=args.index_name,
+                dry_run=getattr(args, "dry_run", False),
+                core_cli=core_cli,
+                args=args,
+            )
         return False
 
     def list_sources(self, category: str | None = None) -> None:
@@ -125,15 +170,52 @@ class SourceCLI:
         for error in report.errors:
             print(f"error: {error}")
 
-    def index(self, name: str, index_name: str | None = None, *, dry_run: bool = False) -> None:
+    def index(
+        self,
+        name: str,
+        index_name: str | None = None,
+        *,
+        dry_run: bool = False,
+        core_cli: Any = None,
+        args: argparse.Namespace | None = None,
+    ) -> bool | Any:
         manifest = self.load_manifest(name)
         reader = self.reader_for(manifest)
-        chunks = list(reader.iter_chunks()) if dry_run else []
         target = index_name or manifest.name
         if dry_run:
+            chunks = self._limited_chunks(reader, args)
             print(f"{manifest.name}: dry-run emitted {len(chunks)} chunks for {target}")
-        else:
+            return True
+        if core_cli is None or args is None:
             print(f"{manifest.name}: source indexing target {target} registered")
+            return True
+        return self._build_source_index(core_cli, args, reader, manifest.name, target)
+
+    async def _build_source_index(
+        self,
+        core_cli: Any,
+        args: argparse.Namespace,
+        reader: SourceReader,
+        source_name: str,
+        target: str,
+    ) -> bool:
+        from llama_index.core import Document
+
+        chunks = self._limited_chunks(reader, args)
+        documents = [Document(text=chunk.text, metadata=chunk.metadata) for chunk in chunks]
+        args.index_name = target
+        print(f"Loaded {len(documents)} {source_name} source chunks")
+        await core_cli._build_index_from_documents(args, documents)
+        return True
+
+    def _limited_chunks(
+        self, reader: SourceReader, args: argparse.Namespace | None = None
+    ) -> list[Any]:
+        chunks = list(reader.iter_chunks())
+        max_count = getattr(args, "max_count", None)
+        if max_count is not None:
+            return chunks[:max_count]
+        return chunks
 
     def load_manifest(self, name: str) -> SourceManifest:
         entry = self.entry_for(name)
@@ -147,6 +229,8 @@ class SourceCLI:
         raise SystemExit(f"unknown source: {name}")
 
     def reader_for(self, manifest: SourceManifest) -> SourceReader:
+        if manifest.reader:
+            return self._custom_reader_for(manifest)
         reader_type = manifest.data["type"]
         if reader_type == "sqlite":
             return SQLiteSourceReader(manifest)
@@ -157,3 +241,19 @@ class SourceCLI:
         if reader_type == "export_zip":
             return ExportZipSourceReader(manifest)
         raise SystemExit(f"unsupported source data type: {reader_type}")
+
+    def _custom_reader_for(self, manifest: SourceManifest) -> SourceReader:
+        reader_ref = manifest.reader or ""
+        module_name, class_name = reader_ref.rsplit(".", 1)
+        if module_name == "reader" and manifest.path is not None:
+            reader_path = manifest.path.parent / "reader.py"
+            module_key = f"_leann_source_{manifest.name}_reader"
+            spec = importlib.util.spec_from_file_location(module_key, reader_path)
+            if spec is None or spec.loader is None:
+                raise SystemExit(f"cannot load source reader: {reader_path}")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        else:
+            module = importlib.import_module(module_name)
+        reader_cls = getattr(module, class_name)
+        return reader_cls(manifest)

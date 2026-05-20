@@ -32,6 +32,12 @@ def core_data_epoch_to_utc_iso(value: Any) -> str:
     return _iso_utc(CORE_DATA_EPOCH + timedelta(seconds=_to_float(value)))
 
 
+def cocoa_ns_to_utc_iso(value: Any) -> str | None:
+    if value in (None, "", 0, "0"):
+        return None
+    return _iso_utc(CORE_DATA_EPOCH + timedelta(seconds=_to_float(value) / 1_000_000_000))
+
+
 def webkit_epoch_to_utc_iso(value: Any) -> str:
     microseconds = _to_float(value)
     return _iso_utc(WEBKIT_EPOCH + timedelta(microseconds=microseconds))
