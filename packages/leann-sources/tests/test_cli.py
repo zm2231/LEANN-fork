@@ -65,7 +65,9 @@ def test_sources_subcommands_against_synthetic_registry(tmp_path: Path, capsys):
     plugin = SourcesPlugin(sources_root=sources_root)
 
     _run(plugin, ["sources", "list"])
-    assert "notes/local-notes" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "[notes]" in output
+    assert "notes/local-notes" in output
 
     _run(plugin, ["sources", "list", "--category", "notes"])
     assert "local-notes" in capsys.readouterr().out
