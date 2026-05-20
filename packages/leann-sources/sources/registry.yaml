@@ -1,5 +1,12 @@
 manifest_version: '1.0'
 sources:
+- name: apple-calendar
+  category: calendar
+  display_name: Apple Calendar
+  version: 0.1.0
+  manifest_path: calendar/apple-calendar/manifest.yaml
+  data_type: sqlite
+  privacy_tier: tier_2
 - name: apple-mail
   category: email
   display_name: Apple Mail
