@@ -124,8 +124,13 @@ class SourceCLI:
         entries = [
             entry for entry in registry.entries if category is None or entry.category == category
         ]
+        grouped: dict[str, list[SourceRegistryEntry]] = {}
         for entry in entries:
-            print(f"{entry.category}/{entry.name}\t{entry.display_name}\t{entry.data_type}")
+            grouped.setdefault(entry.category, []).append(entry)
+        for category_name in sorted(grouped):
+            print(f"[{category_name}]")
+            for entry in grouped[category_name]:
+                print(f"{entry.category}/{entry.name}\t{entry.display_name}\t{entry.data_type}")
 
     def info(self, name: str) -> None:
         manifest = self.load_manifest(name)

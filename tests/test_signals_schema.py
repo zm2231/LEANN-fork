@@ -252,3 +252,19 @@ def test_source_registry_imessage_chunks_follow_signals_schema(tmp_path):
     assert metadata_rows
     for metadata in metadata_rows:
         _assert_signals_metadata(metadata)
+
+
+def test_source_registry_catalog_manifests_cover_temporal_axes():
+    from leann_sources.cli import SourceCLI
+    from leann_sources.registry import build_registry
+
+    sources_root = ROOT / "packages" / "leann-sources" / "sources"
+    cli = SourceCLI(sources_root)
+    registry = build_registry(sources_root)
+
+    assert len(registry.entries) == 9
+    for entry in registry.entries:
+        manifest = cli.load_manifest(entry.name)
+        assert "created_at" in manifest.fields, entry.name
+        assert "modified_at" in manifest.fields, entry.name
+        assert "event_time" in manifest.fields, entry.name
