@@ -3,9 +3,10 @@
 This branch combines, in order on top of upstream `origin/main`:
 
 1. **Wave 1 — temporal substrate** (`feat/temporal-substrate`, 22 commits)
-2. **Wave 2 — metadata-aware search** (`feat/metadata-aware-search`, 10 commits)
-3. **Integration commit** — reconciles Wave 1's `filter_all_passages` with Wave 2's `score_filtered_subset`
-4. **Fork's 10 custom commits** — multi-index ReAct, web search via Exa+SearXNG, local-proxy LLM defaults, perf fixes
+2. **Wave 1.5 — multi-axis temporal** (`feat/multi-axis-temporal`)
+3. **Wave 2 — metadata-aware search** (`feat/metadata-aware-search`, 10 commits)
+4. **Integration commit** — reconciles Wave 1's `filter_all_passages` with Wave 2's `score_filtered_subset`
+5. **Fork's 10 custom commits** — multi-index ReAct, web search via Exa+SearXNG, local-proxy LLM defaults, perf fixes
 
 Final state: branch is **34 commits ahead of `origin/main`**, 99 combined narrow tests pass.
 
@@ -101,6 +102,32 @@ Supported expressions:
 - `"around the holidays"`, `"around July 4"`
 
 `temporal_overscan` multiplies `top_k` (default 10x) when a temporal filter is added, so date-narrow queries still return enough candidates.
+
+### Multi-axis temporal routing (Wave 1.5)
+
+Temporal search now distinguishes four axes instead of collapsing everything into `event_time`:
+
+| Axis | Meaning |
+|---|---|
+| `created_at` | File/message/document creation time |
+| `modified_at` | Last edit/update time |
+| `event_time` | Real-world event, meeting, message, or commit author time |
+| `indexed_at` | When LEANN ingested the chunk |
+
+`enable_temporal=True` routes natural language to the likely axis: "created in May" uses `created_at`, "modified last week" uses `modified_at`, "meetings yesterday" uses `event_time`, and "indexed today" uses `indexed_at`.
+
+Production search falls back across adjacent axes when older chunks lack the routed field. For exact structured intent, use:
+
+```python
+s.search(
+    "files modified in May",
+    enable_temporal=True,
+    temporal_axis="modified_at",
+    temporal_strict=True,
+)
+```
+
+`explain_filters=True` now reports temporal-axis diagnostics, including the routed axis and fallback use.
 
 ### Datetime-aware metadata filters
 

@@ -140,7 +140,16 @@ The `prefilter_threshold` knob (default 0.05) shifts where auto-mode flips. Rais
 
 ## Temporal (`enable_temporal=True`)
 
-When on, the searcher parses NL time expressions out of the query and converts them to `event_time` filters.
+When on, the searcher parses NL time expressions out of the query and routes them to one of four temporal axes:
+
+| User intent | Routed axis | Examples |
+|---|---|---|
+| Creation / file birth | `created_at` | "created in May", "files made yesterday" |
+| Modification / edit | `modified_at` | "updated last week", "changed on Monday" |
+| Real-world event / message / meeting time | `event_time` | "meetings in April", "messages from yesterday" |
+| Index ingestion | `indexed_at` | "indexed today", "added to the index this week" |
+
+If the routed axis is missing, production search falls back through adjacent axes so older indexes still return useful results. Set `temporal_strict=True` to disable fallback, or pass `temporal_axis="created_at" | "modified_at" | "event_time" | "indexed_at"` when agent code has already inferred the axis.
 
 ### What's parsed
 
@@ -154,7 +163,8 @@ When on, the searcher parses NL time expressions out of the query and converts t
 - The matched time tokens are **stripped** from the semantic query before embedding. "what did Jay say last week" embeds as "what did Jay say".
 - `top_k` is overscanned by `temporal_overscan` (default 10×) because temporal filtering is post-hoc on the ANN candidates.
 - `temporal_now=datetime(...)` overrides "now" for deterministic eval.
-- Caller-supplied `metadata_filters["event_time"]` **wins** over parsed values (caller precedence).
+- Caller-supplied temporal `metadata_filters` **win** over parsed values (caller precedence).
+- `explain_filters=True` reports `temporal_axis_routed`, `temporal_axis_fallback_used`, `temporal_strict`, and synthesized-axis counts.
 
 ### When to turn off
 
@@ -194,6 +204,17 @@ print(s.facets(["source_type", "author"]))
 ### "What's the recompute / model setup for this index?"
 ```bash
 jq '.is_recompute, .is_compact, .embedding_model, .embedding_mode' .leann/indexes/<name>/meta.json
+```
+
+### "Inspect routed temporal axis and fallback"
+```python
+results, diag = s.search(
+    "files modified in May",
+    enable_temporal=True,
+    explain_filters=True,
+)
+print(diag["temporal_axis_routed"])
+print(diag["temporal_axis_fallback_used"])
 ```
 
 ### "Pure-keyword search, no embeddings"

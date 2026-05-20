@@ -53,8 +53,9 @@ Examples:
 # Equality
 --metadata-filters '{"source_type": {"==": "slack"}, "parent_ref": {"==": "channel:big-brain"}}'
 
-# Date range (Wave 1: ISO datetime comparison works correctly)
+# Date range (Wave 1/1.5: ISO datetime comparison works correctly across temporal axes)
 --metadata-filters '{"event_time": {">=": "2026-05-01T00:00:00+00:00", "<=": "2026-05-31T23:59:59+00:00"}}'
+--metadata-filters '{"modified_at": {">=": "2026-05-01T00:00:00+00:00"}}'
 
 # Membership
 --metadata-filters '{"source_type": {"in": ["slack", "daily_summary"]}}'
@@ -122,10 +123,12 @@ s.search(
     max_per_group=2,
     context_window=0,                     # ≥1 → attach N siblings before+after each hit
 
-    # — Wave 1 temporal —
+    # — Wave 1/1.5 temporal —
     enable_temporal=False,                # True → parse NL time expressions in query
     temporal_overscan=10,                 # multiply top_k by this when temporal filter present
     temporal_now=None,                    # datetime override for deterministic eval
+    temporal_strict=False,                # True → do not fall back to adjacent temporal axes
+    temporal_axis=None,                   # override routed axis: created_at | modified_at | event_time | indexed_at
 
     # — hybrid + misc —
     gemma=1.0,                            # 1.0 = pure vector, 0.0 = pure BM25
@@ -211,7 +214,15 @@ Use to debug why a query returns nothing.
 
 **`context_window=1`** — attach 1 sibling chunk before + 1 after each hit (by `source_document_id` + `chunk_seq`). Returned as `SearchResult.siblings: list[SearchResult] | None`.
 
-**`enable_temporal=True`** — parse NL time expressions into `event_time` filters. Supported:
+**`enable_temporal=True`** — parse NL time expressions and route them to a temporal axis:
+- Creation language (`created`, `added`, `made`) → `created_at`
+- Edit/update language (`modified`, `changed`, `updated`) → `modified_at`
+- Event/message/meeting language (`happened`, `sent`, `meeting`) → `event_time`
+- Index-ingest language (`indexed`, `ingested`, `added to index`) → `indexed_at`
+
+Production search falls back to adjacent axes when the routed field is missing; set `temporal_strict=True` when structured agent intent requires the exact axis. Use `temporal_axis="modified_at"` etc. to bypass NL routing.
+
+Supported:
 - `"N {hours,days,weeks,months,years} ago"`
 - `"last/this {week,month,year,Monday,...}"`
 - `"in January"`, `"on March 5th"`, `"since 2026"`
