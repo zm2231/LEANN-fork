@@ -1,0 +1,34 @@
+name: chrome
+category: browser
+display_name: Chrome History
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.ChromeSourceReader
+data:
+  type: sqlite
+  default_path: ~/Library/Application Support/Google/Chrome/Default
+  permissions:
+    - Close Chrome if the History database is locked.
+auth:
+  type: none
+fields:
+  created_at:
+    source: first_visit_time
+  modified_at:
+    source: last_visit_time
+  event_time:
+    source: last_visit_time
+  source_type:
+    value: browser_history
+  source_id:
+    source: url
+  source_url:
+    source: url
+  mentioned_urls:
+    extraction: regex
+    source: url
+    pattern: https?://[^\s>]+
+chunking:
+  granularity: visit
+privacy:
+  tier: tier_2
