@@ -19,6 +19,8 @@ Final state: branch is **34 commits ahead of `origin/main`**, 99 combined narrow
 
 **Everything else is additive** — new kwargs default to off, new fields are optional, new commands are additions. Existing code keeps working.
 
+**Bug fix (post-Wave-1.5)** — `enable_temporal=True` was returning `top_k * temporal_overscan` (default 10×) results instead of `top_k`. Fixed at commit `3930494`. If you were inadvertently relying on the inflated result count, pass a larger `top_k` explicitly.
+
 ---
 
 ## What's new — feature index
