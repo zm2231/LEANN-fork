@@ -3225,12 +3225,11 @@ Examples:
 
     async def index_imessage(self, args):
         """Index iMessage conversations."""
-        from apps.imessage_data.imessage_reader import IMessageReader
-
-        reader = IMessageReader(concatenate_conversations=True)
-        docs = reader.load_data()
-        print(f"Loaded {len(docs)} iMessage conversations")
-        await self._build_index_from_documents(args, docs)
+        print("Deprecated: use `leann index --source imessage` instead of `leann index-imessage`.")
+        args.command = "index"
+        args.source = "imessage"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-imessage`")
 
     async def index_wechat(self, args):
         """Index WeChat chat history from exported JSON."""

@@ -36,7 +36,7 @@ class SourcesPlugin:
     def handle_cli(self, args: Any, core_cli: Any) -> bool:
         from leann_sources.cli import SourceCLI
 
-        return SourceCLI(self.sources_root).handle(args)
+        return SourceCLI(self.sources_root).handle(args, core_cli=core_cli)
 
 
 def get_plugin() -> SourcesPlugin:
