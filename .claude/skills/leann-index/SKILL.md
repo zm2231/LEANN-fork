@@ -52,7 +52,7 @@ leann build my-docs --docs ./documents --force
 
 ## Specialized readers
 
-Each emits canonical SIGNALS metadata (`event_time`, `source_type`, `author`, etc.) so Wave 1 temporal + Wave 2 metadata-aware filters work downstream.
+Each emits canonical SIGNALS metadata (`created_at`, `modified_at`, `event_time`, `indexed_at`, `source_type`, `author`, etc. when available) so Wave 1/1.5 temporal + Wave 2 metadata-aware filters work downstream.
 
 ```bash
 # Chrome/Brave browser history (sqlite-backed)
@@ -62,8 +62,10 @@ leann index-browser chrome
 # Apple Mail (.emlx)
 leann index-email
 
-# Apple Calendar — Wave 1 atom 3:
-# emits event_time (UTC ISO), event_time_local, source_type=calendar, source_id
+# Apple Calendar:
+# emits event_time (UTC ISO), event_time_local, created_at/modified_at when source columns exist,
+# synthesized created_at_synthesized/modified_at_synthesized markers otherwise,
+# source_type=calendar, source_id
 leann index-calendar --max-count 1000
 
 # iMessage (chat.db)
@@ -77,7 +79,7 @@ leann index-wechat
 
 **All `index-*` commands share the same embedding flags as `leann build`** — pass `--embedding-mode openai --embedding-api-base http://100.122.112.83:8100/v1` etc.
 
-**Wave 1 guarantee:** every chunk from `index-*` (and `build`) is stamped with `indexed_at` (UTC ISO) at ingest. Filterable like any metadata field.
+**Wave 1/1.5 guarantee:** every chunk from `index-*` (and `build`) is stamped with `indexed_at` (UTC ISO) at ingest. Filesystem-backed build paths also stamp `created_at` from `st_birthtime` and `modified_at` from `st_mtime` where available; do not treat filesystem `event_time` as meaningful unless a source reader explicitly emits it.
 
 ## Watch mode
 
