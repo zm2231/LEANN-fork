@@ -1435,6 +1435,9 @@ class LeannSearcher:
         self._warmup: bool = bool(enable_warmup)
         self._use_daemon: bool = bool(use_daemon)
         self._daemon_ttl_seconds: int = int(daemon_ttl_seconds)
+        # Optional query log (PR #325): when LEANN_QUERY_LOG is set, each
+        # search() appends a JSONL record for offline benchmark replay.
+        self._query_log_path: Optional[str] = os.environ.get("LEANN_QUERY_LOG") or None
 
         final_kwargs = {**self.meta_data.get("backend_kwargs", {}), **backend_kwargs}
         final_kwargs["enable_warmup"] = self._warmup
@@ -1449,6 +1452,11 @@ class LeannSearcher:
             index_path, **final_kwargs
         )
         self.bm25_scorer: Optional[BM25Index] = None
+
+        # Optional query log path: set via LEANN_QUERY_LOG=<path>. When set, each
+        # search appends a JSON line containing the query, embedding (if computed),
+        # top_k, and result IDs/scores. Useful for offline benchmark replay.
+        self._query_log_path: Optional[str] = os.environ.get("LEANN_QUERY_LOG") or None
 
         # Optional one-shot warmup at construction time to hide cold-start latency.
         if self._warmup:
@@ -1762,6 +1770,9 @@ class LeannSearcher:
             )
             logger.warning(f"  ✅ Auto-adjusted top_k to {top_k} to match available documents")
 
+        # Initialize so it's in scope for the query-log path even when only BM25 runs.
+        query_embedding: Optional[np.ndarray] = None
+
         # Handle pure keyword search
         if vector_weight == 0.0:
             start_time = time.time()
@@ -1996,6 +2007,11 @@ class LeannSearcher:
         GREEN = "\033[92m"
         RESET = "\033[0m"
         logger.info(f"  {GREEN}✓ Final enriched results: {len(enriched_results)} passages{RESET}")
+        # Optional query log (LEANN_QUERY_LOG) — fire once before either return
+        # path so it covers both the metadata-filter and no-filter branches.
+        if self._query_log_path:
+            self._log_query(query, query_embedding, top_k, enriched_results)
+
         if metadata_filters:
             if "filter_stats" not in locals() or filter_stats is None:
                 filter_stats = self.passage_manager.filter_stats(metadata_filters)
@@ -2020,6 +2036,29 @@ class LeannSearcher:
             ann_candidates_returned=ann_candidates_returned,
             postfilter_survivors=postfilter_survivors,
         )
+
+    def _log_query(
+        self,
+        query: str,
+        query_embedding: Optional[np.ndarray],
+        top_k: int,
+        results: list[SearchResult],
+    ) -> None:
+        """Append a JSONL line to LEANN_QUERY_LOG for later benchmark replay."""
+        entry: dict[str, Any] = {
+            "ts": time.time(),
+            "query": query,
+            "top_k": top_k,
+            "results": [{"id": r.id, "score": r.score} for r in results],
+        }
+        if query_embedding is not None:
+            entry["embedding"] = query_embedding.flatten().tolist()
+        try:
+            with open(self._query_log_path, "a", encoding="utf-8") as f:
+                json.dump(entry, f)
+                f.write("\n")
+        except Exception as exc:
+            logger.warning(f"Failed to append to query log {self._query_log_path}: {exc}")
 
     def _init_bm25(self) -> None:
         """Initialize a BM25Index, preferring a build-time artifact when present."""
