@@ -21,6 +21,7 @@ def test_context_layer_documents_and_gold_validate(tmp_path):
 
     assert len(documents) == 50
     for document in documents:
+        assert document.text.startswith("Path: ")
         assert document.metadata["source_type"] == "context_layer"
         assert document.metadata["created_at"]
         assert document.metadata["modified_at"]
@@ -34,6 +35,7 @@ def test_context_layer_documents_and_gold_validate(tmp_path):
     assert len(rows) == 50
     assert sum(row["bucket"] != "adversarial" for row in rows) == 40
     assert {row["axis_expected"] for row in rows} == {"created_at", "modified_at", "event_time"}
+    assert all(row["expected_min_results"] == 1 for row in rows)
 
 
 def test_context_layer_skips_volatile_service_dirs(tmp_path):

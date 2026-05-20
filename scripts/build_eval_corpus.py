@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import re
 import shutil
 import sqlite3
@@ -31,6 +32,10 @@ INDEX_NAMES = {
     "slack": "eval-slack",
     "daily_summary": "eval-summaries",
 }
+EMBEDDING_BASE_URL = os.environ.get(
+    "LEANN_EVAL_EMBEDDING_BASE_URL",
+    "http://100.122.112.83:8100/v1",
+)
 EMBEDDING_BATCH_SIZE = 128
 SLACK_CHUNK_CHARS = 800
 SLACK_CHUNK_OVERLAP = 80
@@ -66,7 +71,7 @@ def should_rebuild(cli: LeannCLI, index_name: str, sources: Iterable[Path], forc
 
 async def build_documents(cli: LeannCLI, index_name: str, documents: list[Document]) -> None:
     embedding_options = {
-        "base_url": "http://localhost:8100/v1",
+        "base_url": EMBEDDING_BASE_URL,
         "api_key": "iq-local",
     }
     builder = LeannBuilder(
