@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import hashlib
 import importlib.metadata
+import inspect
 import io
 import json
 import logging
@@ -205,6 +206,18 @@ class LeannCLI:
                 register_cli(subparsers, self)
             for register_subcommand in getattr(plugin, "cli_subcommands", ()) or ():
                 register_subcommand(subparsers, self)
+
+    async def _handle_plugin_command(self, args: argparse.Namespace) -> bool:
+        for plugin in self.plugins:
+            handle_cli = getattr(plugin, "handle_cli", None)
+            if not callable(handle_cli):
+                continue
+            result = handle_cli(args, self)
+            if inspect.isawaitable(result):
+                result = await result
+            if result:
+                return True
+        return False
 
     def get_index_path(self, index_name: str) -> str:
         index_dir = self.indexes_dir / index_name
@@ -3410,6 +3423,8 @@ Examples:
                 await self.react_agent(args)
         elif args.command == "serve":
             await self.serve_api(args)
+        elif await self._handle_plugin_command(args):
+            return
         elif args.command in (
             "index-browser",
             "index-email",

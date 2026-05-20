@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "leann-sources" / "src"))
 
 from leann.cli import LeannCLI
-from leann_sources import get_plugin
+from leann_sources import SourcesPlugin, get_plugin
+from leann_sources.registry import write_registry
 
 
 @dataclass
@@ -40,3 +45,52 @@ def test_cli_ignores_absent_plugins(monkeypatch):
 
     assert cli.plugins == []
     assert parser.prog == "leann"
+
+
+def test_sources_command_only_exists_when_plugin_installed(monkeypatch, tmp_path, capsys):
+    sources_root = tmp_path / "sources"
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    (data_root / "note.txt").write_text("hello", encoding="utf-8")
+    source_dir = sources_root / "notes" / "local-notes"
+    source_dir.mkdir(parents=True)
+    (source_dir / "manifest.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "local-notes",
+                "category": "notes",
+                "display_name": "Local Notes",
+                "version": "0.1.0",
+                "manifest_version": "1.0",
+                "data": {"type": "filesystem", "default_path": str(data_root), "glob": "*.txt"},
+                "auth": {"type": "none"},
+                "fields": {"source_type": {"value": "document"}, "source_id": {"source": "name"}},
+                "chunking": {"granularity": "file"},
+                "privacy": {"tier": "tier_1"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    write_registry(sources_root)
+
+    monkeypatch.setattr(
+        "leann.cli.importlib.metadata.entry_points",
+        lambda group=None: [
+            FakeEntryPoint("sources", lambda: SourcesPlugin(sources_root=sources_root))
+        ]
+        if group == "leann.plugins"
+        else [],
+    )
+    cli = LeannCLI()
+    parser = cli.create_parser()
+    args = parser.parse_args(["sources", "list"])
+
+    asyncio.run(cli.run(args))
+
+    assert "notes/local-notes" in capsys.readouterr().out
+
+    monkeypatch.setattr("leann.cli.importlib.metadata.entry_points", lambda group=None: [])
+    parser_without_plugin = LeannCLI().create_parser()
+    with pytest.raises(SystemExit):
+        parser_without_plugin.parse_args(["sources", "list"])
