@@ -1,0 +1,29 @@
+name: wechat
+category: messaging
+display_name: WeChat Export
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.WeChatSourceReader
+data:
+  type: export_zip
+  default_path: ./wechat_export
+auth:
+  type: none
+fields:
+  created_at:
+    source: createTime
+  modified_at:
+    source: end_time
+  event_time:
+    source: createTime
+  source_type:
+    value: wechat
+  source_id:
+    source: id
+  participant_ids:
+    source: participants
+    transform: list_of_handles
+chunking:
+  granularity: message_group
+privacy:
+  tier: tier_2

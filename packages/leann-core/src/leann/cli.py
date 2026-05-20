@@ -3120,16 +3120,11 @@ Examples:
 
     async def index_wechat(self, args):
         """Index WeChat chat history from exported JSON."""
-        from apps.history_data.wechat_history import WeChatHistoryReader
-
-        reader = WeChatHistoryReader()
-        docs = reader.load_data(
-            input_dir=args.export_dir,
-            max_count=args.max_count,
-            concatenate_messages=True,
-        )
-        print(f"Loaded {len(docs)} WeChat conversations")
-        await self._build_index_from_documents(args, docs)
+        print("Deprecated: use `leann index --source wechat` instead of `leann index-wechat`.")
+        args.command = "index"
+        args.source = "wechat"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-wechat`")
 
     async def index_chatgpt(self, args):
         """Index ChatGPT export data."""
