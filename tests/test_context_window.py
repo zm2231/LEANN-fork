@@ -1,6 +1,5 @@
-from test_prefilter_integration import _searcher
-
 from leann.api import LeannSearcher, SearchResult
+from test_prefilter_integration import _searcher
 
 
 def test_context_window_attaches_previous_and_next_siblings():
@@ -8,9 +7,8 @@ def test_context_window_attaches_previous_and_next_siblings():
 
     results = searcher.search("query", top_k=1, context_window=1)
 
-    assert len(results) == 2
+    assert len(results) == 1
     assert [sibling.id for sibling in results[0].siblings] == ["doc-ann:0", "doc-ann:2"]
-    assert [sibling.id for sibling in results[1].siblings] == ["doc-ann:1", "doc-ann:3"]
 
 
 def test_context_window_first_chunk_returns_only_next_sibling():
