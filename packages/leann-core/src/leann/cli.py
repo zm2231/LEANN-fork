@@ -2,8 +2,10 @@ import argparse
 import asyncio
 import contextlib
 import hashlib
+import importlib.metadata
 import io
 import json
+import logging
 import os
 import pickle
 import sys
@@ -30,6 +32,8 @@ from .settings import (
     resolve_openai_base_url,
 )
 from .sync import FileSynchronizer
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_path(path: str) -> str:
@@ -178,6 +182,29 @@ class LeannCLI:
             separator="\n",  # Split by lines for code
             paragraph_separator="\n\n",  # Preserve logical code blocks
         )
+        self.plugins = self._load_plugins()
+
+    def _load_plugins(self) -> list[Any]:
+        try:
+            entry_points = importlib.metadata.entry_points(group="leann.plugins")
+        except TypeError:
+            entry_points = importlib.metadata.entry_points().get("leann.plugins", [])
+        plugins = []
+        for entry_point in entry_points:
+            try:
+                plugin_factory = entry_point.load()
+                plugins.append(plugin_factory())
+            except Exception as exc:
+                logger.warning("Could not load LEANN plugin %s: %s", entry_point.name, exc)
+        return plugins
+
+    def _register_plugin_subcommands(self, subparsers: argparse._SubParsersAction) -> None:
+        for plugin in self.plugins:
+            register_cli = getattr(plugin, "register_cli", None)
+            if callable(register_cli):
+                register_cli(subparsers, self)
+            for register_subcommand in getattr(plugin, "cli_subcommands", ()) or ():
+                register_subcommand(subparsers, self)
 
     def get_index_path(self, index_name: str) -> str:
         index_dir = self.indexes_dir / index_name
@@ -768,6 +795,8 @@ Examples:
         serve_parser.add_argument(
             "--port", type=int, default=None, help="Port to bind to (default: 8000)"
         )
+
+        self._register_plugin_subcommands(subparsers)
 
         return parser
 
