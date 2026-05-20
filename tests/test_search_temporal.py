@@ -43,6 +43,30 @@ def test_search_with_temporal_filters_last_month_results():
     )
 
 
+def test_search_temporal_overscan_trims_back_to_caller_top_k():
+    """Regression: temporal_overscan multiplies the ANN candidate pool but must
+    not leak past the caller's requested top_k. Was returning ~top_k * overscan
+    before fix (api.py search() final trim in _return_with_diagnostics)."""
+    searcher = _require_slack_searcher()
+
+    results = searcher.search(
+        "Slack discussions last month",
+        top_k=3,
+        enable_temporal=True,
+        temporal_overscan=10,
+    )
+    assert len(results) <= 3
+
+    results_strict = searcher.search(
+        "Slack discussions last month",
+        top_k=3,
+        enable_temporal=True,
+        temporal_strict=True,
+        temporal_overscan=10,
+    )
+    assert len(results_strict) <= 3
+
+
 def test_search_merges_caller_filters_with_parsed_temporal_filters(monkeypatch):
     searcher = _require_slack_searcher()
     captured_filters = []
