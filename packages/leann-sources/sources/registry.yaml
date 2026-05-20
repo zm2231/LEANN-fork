@@ -21,6 +21,13 @@ sources:
   manifest_path: email/apple-mail/manifest.yaml
   data_type: filesystem
   privacy_tier: tier_2
+- name: chatgpt-export
+  category: imports
+  display_name: ChatGPT Export
+  version: 0.1.0
+  manifest_path: imports/chatgpt-export/manifest.yaml
+  data_type: export_zip
+  privacy_tier: tier_2
 - name: imessage
   category: messaging
   display_name: iMessage
