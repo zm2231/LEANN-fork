@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leann-sources"
+version = "0.1.0"
+description = "Declarative source registry and readers for LEANN ingest surfaces."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "jsonschema>=4.0.0",
+    "pyyaml>=6.0.0",
+    "requests>=2.25.0",
+]
+
+[project.entry-points."leann.plugins"]
+sources = "leann_sources:get_plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
