@@ -1,5 +1,12 @@
 manifest_version: '1.0'
 sources:
+- name: apple-mail
+  category: email
+  display_name: Apple Mail
+  version: 0.1.0
+  manifest_path: email/apple-mail/manifest.yaml
+  data_type: filesystem
+  privacy_tier: tier_2
 - name: imessage
   category: messaging
   display_name: iMessage

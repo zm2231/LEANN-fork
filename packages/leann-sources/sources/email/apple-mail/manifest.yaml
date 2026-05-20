@@ -1,0 +1,39 @@
+name: apple-mail
+category: email
+display_name: Apple Mail
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.AppleMailReader
+data:
+  type: filesystem
+  default_path: ~/Library/Mail
+  permissions:
+    - Full Disk Access may be required for ~/Library/Mail.
+auth:
+  type: none
+fields:
+  created_at:
+    source: date
+  modified_at:
+    source: x_last_modified
+  event_time:
+    source: date
+  source_type:
+    value: email
+  source_id:
+    source: path
+  author:
+    source: from
+  activity_type:
+    value: authored
+  participant_ids:
+    source: participants
+    transform: list_of_handles
+  mentioned_urls:
+    extraction: regex
+    source: body
+    pattern: https?://[^\s>]+
+chunking:
+  granularity: message
+privacy:
+  tier: tier_2
