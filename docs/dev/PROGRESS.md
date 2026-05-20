@@ -163,3 +163,5 @@ Atom 1: 7e0957d — Added manifest-driven SQLite, filesystem, API, and export-zi
 Atom 2: 28dcc8c — Added source manifest discovery, registry generation, an empty generated `registry.yaml`, a registry generator tool, the `leann_sources` plugin descriptor, and a small `leann-core` entry-point loader that leaves CLI behavior unchanged when no plugin is installed.
 
 Atom 3: 7ada34d — Added the plugin-owned `leann sources` namespace and `leann index --source` parser/dispatch with synthetic-registry coverage for list/info/install/connect/validate/index and installed-vs-absent plugin behavior.
+
+Atom 4: 5d67cb1 — Migrated iMessage into the source registry with a manifest, custom SQLite reader, per-source README/SKILL, Cocoa timestamp transform, generated registry entry, legacy `index-imessage` compatibility routing, focused reader/CLI coverage, and SIGNALS schema regression coverage.
