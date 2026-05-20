@@ -42,3 +42,10 @@ sources:
   manifest_path: messaging/imessage/manifest.yaml
   data_type: sqlite
   privacy_tier: tier_1
+- name: wechat
+  category: messaging
+  display_name: WeChat Export
+  version: 0.1.0
+  manifest_path: messaging/wechat/manifest.yaml
+  data_type: export_zip
+  privacy_tier: tier_2
