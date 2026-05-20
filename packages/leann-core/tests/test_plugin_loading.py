@@ -145,3 +145,65 @@ def test_index_imessage_alias_routes_to_source_plugin(monkeypatch, tmp_path):
 
     assert captured["index_name"] == "imessage"
     assert captured["docs"][0].metadata["source_type"] == "imessage"
+
+
+@pytest.mark.parametrize(
+    ("argv", "source_name"),
+    [
+        (["index-browser"], "chrome"),
+        (["index-email"], "apple-mail"),
+        (["index-calendar"], "apple-calendar"),
+        (["index-wechat", "--export-dir", "{data_root}"], "wechat"),
+        (["index-chatgpt", "--export-path", "{data_root}"], "chatgpt-export"),
+        (["index-claude", "--export-path", "{data_root}"], "claude-export"),
+    ],
+)
+def test_legacy_index_aliases_route_to_source_plugins(monkeypatch, tmp_path, argv, source_name):
+    sources_root = tmp_path / "sources"
+    data_root = tmp_path / "data"
+    data_root.mkdir()
+    (data_root / "note.txt").write_text("hello", encoding="utf-8")
+    source_dir = sources_root / "compat" / source_name
+    source_dir.mkdir(parents=True)
+    (source_dir / "manifest.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": source_name,
+                "category": "compat",
+                "display_name": source_name,
+                "version": "0.1.0",
+                "manifest_version": "1.0",
+                "data": {"type": "filesystem", "default_path": str(data_root), "glob": "*.txt"},
+                "auth": {"type": "none"},
+                "fields": {"source_type": {"value": source_name}, "source_id": {"source": "name"}},
+                "chunking": {"granularity": "file"},
+                "privacy": {"tier": "tier_1"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    write_registry(sources_root)
+    monkeypatch.setattr(
+        "leann.cli.importlib.metadata.entry_points",
+        lambda group=None: [
+            FakeEntryPoint("sources", lambda: SourcesPlugin(sources_root=sources_root))
+        ]
+        if group == "leann.plugins"
+        else [],
+    )
+    cli = LeannCLI()
+    parser = cli.create_parser()
+    args = parser.parse_args([str(data_root) if part == "{data_root}" else part for part in argv])
+    captured = {}
+
+    async def fake_build(build_args, docs):
+        captured["index_name"] = build_args.index_name
+        captured["docs"] = docs
+
+    cli._build_index_from_documents = fake_build
+
+    asyncio.run(cli.run(args))
+
+    assert captured["index_name"]
+    assert captured["docs"][0].metadata["source_type"] == source_name
