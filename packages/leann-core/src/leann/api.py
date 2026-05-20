@@ -1550,6 +1550,7 @@ class LeannSearcher:
 
         temporal_axis_routed = None
         temporal_filter_spec = None
+        requested_top_k = top_k
 
         if temporal_axis is not None:
             validate_temporal_axis(temporal_axis)
@@ -1607,6 +1608,10 @@ class LeannSearcher:
             ann_candidates_returned: int,
             postfilter_survivors: int,
         ) -> list[SearchResult] | tuple[list[SearchResult], dict[str, Any]]:
+            # Trim back to the caller's requested top_k. Temporal overscan inflates
+            # top_k for ANN/diversify; the final result list must honor the caller.
+            if len(search_results) > requested_top_k:
+                search_results = search_results[:requested_top_k]
             if not explain_filters:
                 return search_results
             diagnostics = {
