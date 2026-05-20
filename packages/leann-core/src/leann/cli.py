@@ -3101,17 +3101,11 @@ Examples:
 
     async def index_email(self, args):
         """Index Apple Mail."""
-        from apps.email_data.LEANN_email_reader import EmlxReader, find_all_messages_directories
-
-        msg_dirs = find_all_messages_directories()
-        if not msg_dirs:
-            print("No Apple Mail Messages directories found.")
-            return
-        reader = EmlxReader()
-        docs = []
-        for msg_dir in msg_dirs:
-            docs.extend(reader.load_data(str(msg_dir), max_count=args.max_count))
-        await self._build_index_from_documents(args, docs)
+        print("Deprecated: use `leann index --source apple-mail` instead of `leann index-email`.")
+        args.command = "index"
+        args.source = "apple-mail"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-email`")
 
     async def index_calendar(self, args):
         """Index Apple Calendar events."""
