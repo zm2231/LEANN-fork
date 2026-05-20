@@ -1,0 +1,27 @@
+name: claude-export
+category: imports
+display_name: Claude Export
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.ClaudeExportReader
+data:
+  type: export_zip
+  default_path: ./claude.json
+auth:
+  type: none
+fields:
+  created_at:
+    source: timestamp
+  modified_at:
+    source: timestamp
+    synthesized_from: event_time
+  event_time:
+    source: timestamp
+  source_type:
+    value: claude
+  source_id:
+    source: title
+chunking:
+  granularity: conversation
+privacy:
+  tier: tier_2

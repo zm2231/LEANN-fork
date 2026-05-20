@@ -28,6 +28,13 @@ sources:
   manifest_path: imports/chatgpt-export/manifest.yaml
   data_type: export_zip
   privacy_tier: tier_2
+- name: claude-export
+  category: imports
+  display_name: Claude Export
+  version: 0.1.0
+  manifest_path: imports/claude-export/manifest.yaml
+  data_type: export_zip
+  privacy_tier: tier_2
 - name: imessage
   category: messaging
   display_name: iMessage
