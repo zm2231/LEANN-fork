@@ -161,3 +161,5 @@ Atom 0: 81e2227 — Added the optional `leann-sources` package skeleton with man
 Atom 1: 7e0957d — Added manifest-driven SQLite, filesystem, API, and export-zip reader bases with shared field mapping, UTC temporal transform application, synthesized-axis markers, macOS `st_birthtime` filesystem creation time, and fixture coverage for SIGNALS-style chunks.
 
 Atom 2: 28dcc8c — Added source manifest discovery, registry generation, an empty generated `registry.yaml`, a registry generator tool, the `leann_sources` plugin descriptor, and a small `leann-core` entry-point loader that leaves CLI behavior unchanged when no plugin is installed.
+
+Atom 3: 7ada34d — Added the plugin-owned `leann sources` namespace and `leann index --source` parser/dispatch with synthetic-registry coverage for list/info/install/connect/validate/index and installed-vs-absent plugin behavior.
