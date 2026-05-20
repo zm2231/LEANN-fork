@@ -23,6 +23,8 @@ SOURCE_TYPES = {
     "chatgpt",
     "claude",
     "wechat",
+    "whatsapp",
+    "github",
     "code",
     "voice_memo",
     "journal",
