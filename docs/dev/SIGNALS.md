@@ -60,7 +60,7 @@ If a reader must synthesize an axis because the source cannot distinguish it (fo
 
 | Field | Type | Required | Example | Notes |
 |---|---|---|---|---|
-| `source_type` | enum string | yes | `"document"`, `"git_commit"`, `"slack"`, `"daily_summary"`, `"email"`, `"imessage"`, `"browser_history"`, `"calendar"`, `"chatgpt"`, `"claude"`, `"wechat"`, `"code"`, `"voice_memo"`, `"journal"`, `"notion"` | Open enum; new sources add new values. Used for source-typed filtering and per-type extraction rules. `daily_summary` = LLM-generated per-channel-per-day rollups (`event_time` = the day at 00:00 UTC, multi-author so `author=null`). |
+| `source_type` | enum string | yes | `"document"`, `"git_commit"`, `"slack"`, `"daily_summary"`, `"email"`, `"imessage"`, `"browser_history"`, `"calendar"`, `"chatgpt"`, `"claude"`, `"wechat"`, `"whatsapp"`, `"github"`, `"code"`, `"voice_memo"`, `"journal"`, `"notion"` | Open enum; new sources add new values. Used for source-typed filtering and per-type extraction rules. `daily_summary` = LLM-generated per-channel-per-day rollups (`event_time` = the day at 00:00 UTC, multi-author so `author=null`). |
 | `source_id` | string | yes if stable identifier exists | `"<commit-sha>"`, `"<slack-ts>"`, `"<msg-id>"` | Stable per-source identifier so the same event can be deduplicated across re-indexes. |
 | `source_url` | string | optional | `"https://github.com/.../commit/abc"`, `"slack://channel/C01/p123"` | Deep link back to the original. Connectors use this to merge across readers. |
 | `project_id` | string | optional | `"leann"`, `"context-layer"` | Project/repo/scope this chunk belongs to. Critical for multi-project corpora. |

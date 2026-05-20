@@ -1,0 +1,67 @@
+name: github
+category: developer-tools
+display_name: GitHub
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.GitHubSourceReader
+data:
+  type: api
+  base_url: https://api.github.com
+  timeout: 30
+  repositories_env: GITHUB_REPOSITORIES
+auth:
+  type: env_var
+  env_vars:
+    - GITHUB_TOKEN
+fields:
+  created_at:
+    source: created_at
+  modified_at:
+    source: updated_at
+  event_time:
+    source: event_time
+    synthesized_from: created_at
+  author:
+    source: author
+  activity_type:
+    value: authored
+  source_type:
+    value: github
+  source_id:
+    source: source_id
+  source_url:
+    source: source_url
+  project_id:
+    source: project_id
+  parent_ref:
+    source: parent_ref
+  source_document_id:
+    source: source_document_id
+  chunk_seq:
+    auto: row_index_within_source_document_id
+  mentioned_urls:
+    extraction: regex
+    source: text
+    pattern: https?://[^\s>]+
+  mentioned_refs:
+    extraction: regex
+    source: text
+    pattern: (?:#\d+|[A-Z][A-Z0-9]+-\d+)
+  mentioned_files:
+    source: mentioned_files
+chunking:
+  granularity: event
+  text_template: |
+    GitHub {kind} in {project_id}
+    Title: {title}
+    Author: {author}
+    Body: {text}
+privacy:
+  tier: tier_2
+connectors:
+  cross_source_match_by:
+    - source_url
+    - mentioned_urls
+    - mentioned_refs
+    - mentioned_files
+  event_id_strategy: github_node_or_url

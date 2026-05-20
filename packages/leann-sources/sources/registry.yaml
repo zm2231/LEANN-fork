@@ -14,6 +14,13 @@ sources:
   manifest_path: calendar/apple-calendar/manifest.yaml
   data_type: sqlite
   privacy_tier: tier_2
+- name: github
+  category: developer-tools
+  display_name: GitHub
+  version: 0.1.0
+  manifest_path: developer-tools/github/manifest.yaml
+  data_type: api
+  privacy_tier: tier_2
 - name: apple-mail
   category: email
   display_name: Apple Mail
@@ -49,3 +56,10 @@ sources:
   manifest_path: messaging/wechat/manifest.yaml
   data_type: export_zip
   privacy_tier: tier_2
+- name: whatsapp
+  category: messaging
+  display_name: WhatsApp
+  version: 0.1.0
+  manifest_path: messaging/whatsapp/manifest.yaml
+  data_type: sqlite
+  privacy_tier: tier_3
