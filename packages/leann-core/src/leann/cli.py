@@ -3143,15 +3143,13 @@ Examples:
 
     async def index_claude(self, args):
         """Index Claude export data."""
-        from apps.claude_data.claude_reader import ClaudeReader
-
-        reader = ClaudeReader(concatenate_conversations=True)
-        docs = reader.load_data(
-            input_dir=args.export_path,
-            max_count=args.max_count,
+        print(
+            "Deprecated: use `leann index --source claude-export` instead of `leann index-claude`."
         )
-        print(f"Loaded {len(docs)} Claude conversations")
-        await self._build_index_from_documents(args, docs)
+        args.command = "index"
+        args.source = "claude-export"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-claude`")
 
     async def react_agent(self, args):
         """Run ReAct agent for multiturn retrieval."""
