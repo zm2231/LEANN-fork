@@ -1,5 +1,12 @@
 manifest_version: '1.0'
 sources:
+- name: chrome
+  category: browser
+  display_name: Chrome History
+  version: 0.1.0
+  manifest_path: browser/chrome/manifest.yaml
+  data_type: sqlite
+  privacy_tier: tier_2
 - name: apple-calendar
   category: calendar
   display_name: Apple Calendar

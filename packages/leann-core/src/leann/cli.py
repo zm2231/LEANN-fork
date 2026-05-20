@@ -3086,18 +3086,11 @@ Examples:
 
     async def index_browser(self, args):
         """Index browser history (Chrome or Brave)."""
-        from apps.history_data.history import ChromeHistoryReader
-
-        browser = getattr(args, "browser", "chrome")
-        profile_paths = {
-            "chrome": "~/Library/Application Support/Google/Chrome/Default",
-            "brave": "~/Library/Application Support/BraveSoftware/Brave-Browser/Default",
-        }
-        profile = os.path.expanduser(profile_paths.get(browser, profile_paths["chrome"]))
-        reader = ChromeHistoryReader()
-        docs = reader.load_data(chrome_profile_path=profile, max_count=args.max_count)
-        print(f"Loaded {len(docs)} {browser} history entries")
-        await self._build_index_from_documents(args, docs)
+        print("Deprecated: use `leann index --source chrome` instead of `leann index-browser`.")
+        args.command = "index"
+        args.source = "chrome"
+        if not await self._handle_plugin_command(args):
+            raise SystemExit("leann-sources plugin is required for `leann index-browser`")
 
     async def index_email(self, args):
         """Index Apple Mail."""

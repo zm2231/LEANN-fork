@@ -180,6 +180,8 @@ class SourceCLI:
         args: argparse.Namespace | None = None,
     ) -> bool | Any:
         manifest = self.load_manifest(name)
+        if args is not None:
+            self._apply_arg_overrides(manifest, args)
         reader = self.reader_for(manifest)
         target = index_name or manifest.name
         if dry_run:
@@ -216,6 +218,17 @@ class SourceCLI:
         if max_count is not None:
             return chunks[:max_count]
         return chunks
+
+    def _apply_arg_overrides(self, manifest: SourceManifest, args: argparse.Namespace) -> None:
+        if getattr(args, "export_dir", None):
+            manifest.data["default_path"] = args.export_dir
+        if getattr(args, "export_path", None):
+            manifest.data["default_path"] = args.export_path
+        browser = getattr(args, "browser", None)
+        if manifest.name == "chrome" and browser == "brave":
+            manifest.data["default_path"] = (
+                "~/Library/Application Support/BraveSoftware/Brave-Browser/Default"
+            )
 
     def load_manifest(self, name: str) -> SourceManifest:
         entry = self.entry_for(name)
