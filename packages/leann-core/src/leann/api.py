@@ -1326,7 +1326,7 @@ class LeannSearcher:
         self,
         index_path: str,
         enable_warmup: bool = True,
-        recompute_embeddings: bool = True,
+        recompute_embeddings: Optional[bool] = None,
         use_daemon: bool = True,
         daemon_ttl_seconds: int = 900,
         **backend_kwargs,
@@ -1379,8 +1379,16 @@ class LeannSearcher:
         if backend_factory is None:
             raise ValueError(f"Backend '{backend_name}' not found.")
 
-        # Global recompute flag for this searcher (explicit knob, default True)
-        self.recompute_embeddings: bool = bool(recompute_embeddings)
+        # Recompute flag: when caller passes None (default), auto-detect from
+        # the index's meta.json so callers don't silently get the slow embed-
+        # and-score path on no-recompute indexes. Explicit True/False wins.
+        if recompute_embeddings is None:
+            meta_kwargs = self.meta_data.get("backend_kwargs", {}) or {}
+            self.recompute_embeddings: bool = bool(
+                meta_kwargs.get("is_recompute", True)
+            )
+        else:
+            self.recompute_embeddings: bool = bool(recompute_embeddings)
 
         # Warmup flag: keep using the existing enable_warmup parameter,
         # but default it to True so cold-start happens earlier.
