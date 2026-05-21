@@ -170,6 +170,48 @@ class HNSWSearcher(BaseSearcher):
                     self._id_map = [line.rstrip("\n") for line in f]
         except Exception as e:
             logger.warning(f"Failed to load ID map: {e}")
+        self._id_to_int: dict[str, int] = {pid: i for i, pid in enumerate(self._id_map)}
+
+    def supports_stored_vector_scoring(self) -> bool:
+        """True when score_passage_ids can serve scores from the stored index."""
+        return not self.is_pruned
+
+    def score_passage_ids(self, query: np.ndarray, ids: list[str]) -> dict[str, float]:
+        """Score stored HNSW vectors for a subset of passage IDs.
+
+        Used by the metadata prefilter on no-recompute indexes to avoid
+        re-embedding every filtered passage. Callers should gate on
+        ``supports_stored_vector_scoring()`` and fall back to the
+        embed-and-score path when False.
+        """
+        from . import faiss  # type: ignore
+
+        if self.is_pruned:
+            # Pruned/compact indexes drop per-passage vectors; nothing to reconstruct.
+            raise RuntimeError(
+                "Stored-vector subset scoring requires a non-pruned/no-recompute HNSW index"
+            )
+        if query.dtype != np.float32:
+            query = query.astype(np.float32)
+        query_vector = query[0] if query.ndim == 2 else query
+        if self.distance_metric == "cosine":
+            # FAISS HNSW normalizes stored vectors on insertion when distance is
+            # cosine, so normalizing the query here suffices for correct scores.
+            query_vector = normalize_l2(query_vector.reshape(1, -1))[0]
+
+        scores: dict[str, float] = {}
+        for passage_id in ids:
+            int_id = self._id_to_int.get(passage_id)
+            if int_id is None:
+                continue
+            vec = np.empty(query_vector.shape[0], dtype=np.float32)
+            self._index.reconstruct(int_id, faiss.swig_ptr(vec))
+            if self.distance_metric == "l2":
+                score = -float(np.sum((vec - query_vector) ** 2))
+            else:
+                score = float(vec @ query_vector)
+            scores[passage_id] = score
+        return scores
 
     def search(
         self,
