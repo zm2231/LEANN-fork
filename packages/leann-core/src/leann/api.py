@@ -354,19 +354,12 @@ class PassageManager:
             for field_name, counter in counters.items()
         }
 
-    def score_filtered_subset(
+    def matching_filtered_subset(
         self,
-        query_embedding: np.ndarray,
         metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]],
-        top_k: int,
         exclude_ids: Optional[set[str]] = None,
     ) -> list[SearchResult]:
-        """Brute-force score passages matching metadata filters against the query embedding."""
-        if top_k <= 0:
-            return []
-        if not self.embedding_model:
-            raise ValueError("PassageManager embedding pipeline is not configured.")
-
+        """Return unscored passages matching metadata filters."""
         excluded = {str(passage_id) for passage_id in (exclude_ids or set())}
         matches: list[SearchResult] = []
         for passage in self._iter_passages():
@@ -383,9 +376,42 @@ class PassageManager:
                     metadata=result_dict["metadata"],
                 )
             )
+        return matches
 
+    def score_filtered_subset(
+        self,
+        query_embedding: np.ndarray,
+        metadata_filters: dict[str, dict[str, Union[str, int, float, bool, list]]],
+        top_k: int,
+        exclude_ids: Optional[set[str]] = None,
+    ) -> list[SearchResult]:
+        """Brute-force score passages matching metadata filters against the query embedding.
+
+        This fallback computes embeddings for matching passages. Callers should
+        prefer backend-native stored-vector scoring when available for
+        no-recompute indexes.
+        """
+        matches = self.matching_filtered_subset(metadata_filters, exclude_ids)
+        return self.score_matches(query_embedding, matches, top_k)
+
+    def score_matches(
+        self,
+        query_embedding: np.ndarray,
+        matches: list[SearchResult],
+        top_k: int,
+    ) -> list[SearchResult]:
+        """Embed-and-score a pre-fetched list of matches against the query.
+
+        Separated so the prefilter path can fetch matches once and either
+        score via stored vectors (fast, no-recompute path) or fall back to
+        re-embedding (this method).
+        """
+        if top_k <= 0:
+            return []
         if not matches:
             return []
+        if not self.embedding_model:
+            raise ValueError("PassageManager embedding pipeline is not configured.")
 
         passage_embeddings = compute_embeddings(
             [result.text for result in matches],
@@ -1753,9 +1779,38 @@ class LeannSearcher:
                     prefilter == "auto" and selectivity < prefilter_threshold
                 ):
                     logger.info("  Using brute-force scored prefilter path")
-                    prefilter_results = self.passage_manager.score_filtered_subset(
-                        query_embedding, metadata_filters, top_k
+                    filtered_matches = self.passage_manager.matching_filtered_subset(metadata_filters)
+                    backend_supports_stored = (
+                        not effective_recompute
+                        and hasattr(self.backend_impl, "score_passage_ids")
+                        and (
+                            not hasattr(self.backend_impl, "supports_stored_vector_scoring")
+                            or self.backend_impl.supports_stored_vector_scoring()
+                        )
                     )
+                    if backend_supports_stored:
+                        logger.info("  Scoring filtered subset with stored backend vectors")
+                        score_map = self.backend_impl.score_passage_ids(
+                            query_embedding, [result.id for result in filtered_matches]
+                        )
+                        prefilter_results = sorted(
+                            (
+                                SearchResult(
+                                    id=result.id,
+                                    score=float(score_map[result.id]),
+                                    text=result.text,
+                                    metadata=result.metadata,
+                                )
+                                for result in filtered_matches
+                                if result.id in score_map
+                            ),
+                            key=lambda result: result.score,
+                            reverse=True,
+                        )[:top_k]
+                    else:
+                        prefilter_results = self.passage_manager.score_matches(
+                            query_embedding, filtered_matches, top_k
+                        )
                     postfilter_survivors = len(prefilter_results)
                     prefilter_results = self._diversify_results(
                         prefilter_results, diversify_by, max_per_group, top_k
