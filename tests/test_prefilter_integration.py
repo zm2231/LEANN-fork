@@ -59,17 +59,36 @@ class FakePassageManager:
             "filter_selectivity": self.selectivity,
         }
 
-    def score_filtered_subset(self, query_embedding, metadata_filters, top_k, exclude_ids=None):
-        self.prefilter_calls += 1
+    def matching_filtered_subset(self, metadata_filters, exclude_ids=None):
+        # Returns 3 unscored matches; api.py then either scores via stored
+        # vectors (when backend supports it + no-recompute) or via score_matches.
         return [
             SearchResult(
                 id=str(i),
-                score=1.0 - (i * 0.1),
+                score=0.0,
                 text=f"prefilter hit {i}",
                 metadata={"channel": "rare"},
             )
-            for i in range(min(3, top_k))
+            for i in range(3)
         ]
+
+    def score_matches(self, query_embedding, matches, top_k):
+        self.prefilter_calls += 1
+        return [
+            SearchResult(
+                id=m.id,
+                score=1.0 - (i * 0.1),
+                text=m.text,
+                metadata=m.metadata,
+            )
+            for i, m in enumerate(matches[:top_k])
+        ]
+
+    def score_filtered_subset(self, query_embedding, metadata_filters, top_k, exclude_ids=None):
+        # Back-compat: now thin — used only by callers that haven't been
+        # migrated to matching_filtered_subset + score_matches.
+        matches = self.matching_filtered_subset(metadata_filters, exclude_ids)
+        return self.score_matches(query_embedding, matches, top_k)
 
     def get_passage(self, passage_id):
         return self.passages[passage_id]
@@ -179,3 +198,95 @@ def test_no_metadata_filters_uses_ann_path():
     assert [result.id for result in results] == ["ann-0", "ann-1"]
     assert searcher.passage_manager.prefilter_calls == 0
     assert searcher.backend_impl.search_calls == 1
+
+
+class StoredVectorBackend(FakeBackend):
+    """Backend that exposes score_passage_ids — simulates HNSW + no-recompute."""
+
+    def __init__(self, supports: bool = True):
+        super().__init__()
+        self._supports = supports
+        self.stored_vector_calls = 0
+
+    def supports_stored_vector_scoring(self) -> bool:
+        return self._supports
+
+    def score_passage_ids(self, query, ids):
+        self.stored_vector_calls += 1
+        # Deterministic descending scores tied to id integer suffix.
+        return {pid: 1.0 - 0.05 * int(pid) for pid in ids}
+
+
+def _searcher_with_backend(selectivity, backend, *, recompute=False):
+    searcher = _searcher(selectivity)
+    searcher.backend_impl = backend
+    searcher.recompute_embeddings = recompute
+    return searcher
+
+
+def test_norecompute_prefilter_uses_stored_vectors_when_backend_supports():
+    """Wave 2.1 fix: no-recompute + score_passage_ids skips re-embedding."""
+    backend = StoredVectorBackend(supports=True)
+    searcher = _searcher_with_backend(0.03, backend, recompute=False)
+
+    results = searcher.search(
+        "query",
+        top_k=5,
+        metadata_filters={"channel": {"==": "rare"}},
+        prefilter="auto",
+    )
+
+    assert [r.id for r in results] == ["0", "1", "2"]
+    assert backend.stored_vector_calls == 1
+    # Crucial: must NOT have re-embedded via score_matches
+    assert searcher.passage_manager.prefilter_calls == 0
+
+
+def test_recompute_prefilter_falls_back_to_embed_even_with_stored_backend():
+    """Recompute indexes don't have reliable stored vectors → must re-embed."""
+    backend = StoredVectorBackend(supports=True)
+    searcher = _searcher_with_backend(0.03, backend, recompute=True)
+
+    results = searcher.search(
+        "query",
+        top_k=5,
+        metadata_filters={"channel": {"==": "rare"}},
+        prefilter="auto",
+    )
+
+    assert [r.id for r in results] == ["0", "1", "2"]
+    assert backend.stored_vector_calls == 0
+    assert searcher.passage_manager.prefilter_calls == 1
+
+
+def test_pruned_backend_falls_back_to_embed():
+    """supports_stored_vector_scoring=False (pruned/compact index) → fall back."""
+    backend = StoredVectorBackend(supports=False)
+    searcher = _searcher_with_backend(0.03, backend, recompute=False)
+
+    results = searcher.search(
+        "query",
+        top_k=5,
+        metadata_filters={"channel": {"==": "rare"}},
+        prefilter="auto",
+    )
+
+    assert [r.id for r in results] == ["0", "1", "2"]
+    assert backend.stored_vector_calls == 0
+    assert searcher.passage_manager.prefilter_calls == 1
+
+
+def test_legacy_backend_without_score_passage_ids_falls_back():
+    """Backends predating Wave 2.1 (no score_passage_ids attr) still work."""
+    searcher = _searcher(0.03)  # uses original FakeBackend, no score_passage_ids
+    assert not hasattr(searcher.backend_impl, "score_passage_ids")
+
+    results = searcher.search(
+        "query",
+        top_k=5,
+        metadata_filters={"channel": {"==": "rare"}},
+        prefilter="auto",
+    )
+
+    assert [r.id for r in results] == ["0", "1", "2"]
+    assert searcher.passage_manager.prefilter_calls == 1
