@@ -39,6 +39,14 @@ Filesystem ingest now stamps `created_at` (from `st_birthtime`) + `modified_at` 
 
 Fix at `3930494`: snapshots requested top_k before overscan and trims final results before return. If your code inadvertently relied on the inflated count, pass a larger explicit `top_k`.
 
+### Wave 2.1 — stored-vector prefilter on `--no-recompute` indexes
+
+Your `score_passage_ids` patch landed (with regression tests + a couple of robustness improvements). On `rubio-raw-sources-bge-metadata-norecompute` with `source_family=official_state_gov_text` (3415 matches), filtered search now runs **~307ms** instead of 60s+. Commit `5cccadd`.
+
+### Follow-up — `recompute_embeddings` auto-detect
+
+The Wave 2.1 patch exposed a footgun: `LeannSearcher` defaulted `recompute_embeddings=True`, so callers had to remember `LeannSearcher(path, recompute_embeddings=False)` to hit the stored-vector fast path. **No longer required.** As of `d87890a`, the default is `None` → auto-read from `meta.json["backend_kwargs"]["is_recompute"]`. Your existing query runner that passes `False` explicitly still works (explicit wins). You can drop the kwarg in new code.
+
 ## What this means for your Rubio analysis
 
 You were unblocked by Wave 2's prefilter+facets+explain. Wave 1 + 1.5 give you additional axes for time-bounded queries that should be useful:
