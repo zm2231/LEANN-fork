@@ -143,12 +143,19 @@ Deeper reference: `docs/dev/DECISIONS-SEARCH.md`.
 
 #### `--recompute` vs `--no-recompute` (search side)
 
-**Must match how the index was built.** Read `meta.json` if unsure:
-```bash
-grep -E '"is_recompute"|"is_compact"' .leann/indexes/<name>/meta.json
+**Auto-detected from `meta.json` — don't pass `recompute_embeddings=` unless you know why.**
+
+```python
+LeannSearcher("my-index")                       # auto-detects from meta.json (default)
+LeannSearcher("my-index", recompute_embeddings=False)  # explicit override
 ```
-- Built with `--recompute` → embedding server must be reachable at search time (iq).
-- Built with `--no-recompute` → embeddings already in the index; no server needed.
+
+Build-side flag must match how the index was built. Read it back if curious:
+```bash
+jq '.backend_kwargs.is_recompute' .leann/indexes/<name>/documents.leann.meta.json
+```
+- Built with `--recompute` → embedding server (iq) must be reachable at search time.
+- Built with `--no-recompute` → embeddings already in the index; no server needed at search time. **Plus**: metadata-prefilter queries use the fast stored-vector path (Wave 2.1) instead of re-embedding matches.
 
 #### Picking `top_k` + `complexity`
 
