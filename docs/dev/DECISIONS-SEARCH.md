@@ -124,7 +124,9 @@ The Wave 2 sparse-filter primitive. Default `"auto"` covers ~all cases; override
 When `prefilter="auto"`:
 1. Estimate selectivity (matching passages / total). Fast — uses metadata index, not embeddings.
 2. If selectivity < `prefilter_threshold` (default 0.05 = 5%):
-   - **Brute-force**: score every matching passage against the query, return top-k. Bypasses ANN entirely.
+   - **Brute-force prefilter**: score every matching passage against the query, return top-k. Bypasses ANN entirely.
+   - **On `--no-recompute` indexes (Wave 2.1)**: scores stored FAISS vectors via `score_passage_ids()` instead of re-embedding. ~200× faster on real corpora (307ms vs 60s+ on 3415-match queries against a 9835-chunk index).
+   - **On `--recompute` indexes**: falls back to embed-and-score (still correct, but slow). Embedding server must be reachable.
 3. Otherwise:
    - **ANN-then-postfilter**: standard path. ANN returns candidates, filter prunes.
 

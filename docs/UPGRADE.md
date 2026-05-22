@@ -21,6 +21,10 @@ Final state: branch is **34 commits ahead of `origin/main`**, 99 combined narrow
 
 **Bug fix (post-Wave-1.5)** — `enable_temporal=True` was returning `top_k * temporal_overscan` (default 10×) results instead of `top_k`. Fixed at commit `3930494`. If you were inadvertently relying on the inflated result count, pass a larger `top_k` explicitly.
 
+**Wave 2.1 (post-Wave-3) — stored-vector prefilter on `--no-recompute` indexes.** Wave 2's sparse-filter brute-force path was re-embedding matched passages even when the index had stored embeddings. On a 9835-chunk no-recompute index with a 3415-match filter, the unpatched path was 60s+ per query; the patched path is 307ms. Auto-fires whenever the index was built `--no-recompute` and the backend exposes `score_passage_ids()` (currently HNSW; IVF/DiskANN fall back gracefully). Commit `5cccadd`.
+
+**Wave 2.1 follow-up — `LeannSearcher.recompute_embeddings` auto-detect.** Default changed from `True` to `None`, which means "read from `meta.json`". Previous behavior silently routed no-recompute indexes through the slow embed-and-score path when callers didn't explicitly pass `recompute_embeddings=False`. Now no flag is needed. Explicit `True`/`False` still wins. Commit `d87890a`.
+
 ---
 
 ## What's new — feature index
