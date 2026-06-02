@@ -88,6 +88,35 @@ def handle_request(request):
                         "inputSchema": {"type": "object", "properties": {}},
                     },
                     {
+                        "name": "get_session",
+                        "description": """📄 Read a full agent session log (Claude Code / Codex / pi-agent) by session_id or session_path.
+
+Pairs with `search_sessions` — pass the `session_path` from a search result for an exact lookup,
+or pass `session_id` to do a filename-based search across the on-disk session stores.
+
+Returns the raw JSONL bytes (one event per line) so the caller can expand context around a chunk.""",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "session_path": {
+                                    "type": "string",
+                                    "description": "Absolute path to the session file (preferred — from search_sessions `extra.session_path`).",
+                                },
+                                "session_id": {
+                                    "type": "string",
+                                    "description": "Session id; falls back to searching `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.pi/agent/sessions/` for a matching filename.",
+                                },
+                                "max_bytes": {
+                                    "type": "integer",
+                                    "default": 200000,
+                                    "minimum": 1024,
+                                    "maximum": 5000000,
+                                    "description": "Cap returned bytes (default ~200 KB). Set higher for long sessions.",
+                                },
+                            },
+                        },
+                    },
+                    {
                         "name": "search_sessions",
                         "description": """🧠 Search across your local AI coding-agent session history (Claude Code, Codex, pi-agent).
 
@@ -187,6 +216,73 @@ Examples:
                     text=True,
                     cwd=_base_dir,
                 )
+
+            elif tool_name == "get_session":
+                from pathlib import Path
+
+                session_path = args.get("session_path")
+                session_id = args.get("session_id")
+                max_bytes = int(args.get("max_bytes", 200_000))
+                if not session_path and not session_id:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Error: session_path or session_id is required",
+                                }
+                            ]
+                        },
+                    }
+                resolved: Path | None = None
+                if session_path:
+                    p = Path(session_path).expanduser()
+                    if p.is_file():
+                        resolved = p
+                if resolved is None and session_id:
+                    search_roots = [
+                        Path.home() / ".claude" / "projects",
+                        Path.home() / ".codex" / "sessions",
+                        Path.home() / ".pi" / "agent" / "sessions",
+                    ]
+                    for root in search_roots:
+                        if not root.exists():
+                            continue
+                        for pattern in (
+                            f"**/{session_id}.jsonl",
+                            f"**/*{session_id}*.jsonl",
+                            f"**/*{session_id}*.json",
+                        ):
+                            hits = list(root.glob(pattern))
+                            if hits:
+                                resolved = hits[0]
+                                break
+                        if resolved is not None:
+                            break
+                if resolved is None:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "result": {
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": f"Error: session not found (path={session_path!r} id={session_id!r})",
+                                }
+                            ]
+                        },
+                    }
+                data = resolved.read_bytes()
+                truncated = len(data) > max_bytes
+                body = data[:max_bytes].decode("utf-8", errors="replace")
+                header = f"# session: {resolved}\n# bytes: {len(data)} (truncated={truncated}, max_bytes={max_bytes})\n"
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {"content": [{"type": "text", "text": header + body}]},
+                }
 
             elif tool_name == "search_sessions":
                 if not args.get("query"):
