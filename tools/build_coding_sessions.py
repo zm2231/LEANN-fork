@@ -69,9 +69,21 @@ async def main(args: argparse.Namespace) -> None:
 
     documents: list[Document] = []
     per_source_counts: dict[str, int] = {}
+    long_chunk_count = 0
+    char_cap = args.chunk_char_cap
     for source_name, chunk in _iter_chunks(args.max_count):
-        documents.append(Document(text=chunk.text, metadata=chunk.metadata))
+        text = chunk.text
+        if char_cap > 0 and len(text) > char_cap:
+            text = text[:char_cap] + f"\n…[truncated to {char_cap} chars]"
+            long_chunk_count += 1
+        documents.append(Document(text=text, metadata=chunk.metadata))
         per_source_counts[source_name] = per_source_counts.get(source_name, 0) + 1
+
+    if long_chunk_count:
+        print(
+            f"\n[build] truncated {long_chunk_count} oversized chunks to {char_cap} chars",
+            file=sys.stderr,
+        )
 
     print(f"\nTotal documents: {len(documents)}", file=sys.stderr)
     print(f"By source: {per_source_counts}", file=sys.stderr)
@@ -117,6 +129,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-api-key", default="ignored")
     parser.add_argument("--backend", default="hnsw")
     parser.add_argument("--force", action="store_true", help="Overwrite existing index")
+    parser.add_argument(
+        "--chunk-char-cap",
+        type=int,
+        default=8000,
+        help="Truncate chunk text to this many chars before indexing (0 = no cap, default 8000)",
+    )
     return parser.parse_args()
 
 

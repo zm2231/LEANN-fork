@@ -934,6 +934,23 @@ def compute_embeddings_openai(
             max_batch_size,
         )
 
+    # Allow LEANN_EMBED_BATCH_SIZE env override (any endpoint). Useful when a self-hosted
+    # MLX/HF shim is memory-bound and the default 500-input batch causes metal::malloc
+    # OOMs — e.g. bge-m3 on a 38 GB machine routinely blew past with batch=500.
+    env_cap = os.environ.get("LEANN_EMBED_BATCH_SIZE")
+    if env_cap:
+        try:
+            cap = int(env_cap)
+            if cap > 0:
+                max_batch_size = min(max_batch_size, cap)
+                logger.info(
+                    "LEANN_EMBED_BATCH_SIZE=%d → capping embedding batch_size to %d.",
+                    cap,
+                    max_batch_size,
+                )
+        except ValueError:
+            logger.warning("Ignoring non-integer LEANN_EMBED_BATCH_SIZE=%r", env_cap)
+
     # if avg len is less than 1000, use the max batch size
 
     try:
