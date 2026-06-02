@@ -15,27 +15,32 @@ EXPECTED_SOURCES = {
     "apple-mail",
     "chatgpt-export",
     "chrome",
+    "claude-code",
     "claude-export",
+    "codex",
     "github",
     "imessage",
+    "pi-agent",
     "wechat",
     "whatsapp",
 }
 
 
-def test_closeout_registry_has_nine_sources_and_grouped_list(capsys):
+def test_closeout_registry_has_expected_sources_and_grouped_list(capsys):
     registry = build_registry(SOURCES_ROOT)
 
     assert {entry.name for entry in registry.entries} == EXPECTED_SOURCES
-    assert len(registry.entries) == 9
+    assert len(registry.entries) == len(EXPECTED_SOURCES)
 
     SourceCLI(SOURCES_ROOT).list_sources()
     output = capsys.readouterr().out
 
     assert "[browser]" in output
     assert "[developer-tools]" in output
+    assert "[agent-sessions]" in output
     assert "developer-tools/github" in output
     assert "messaging/whatsapp" in output
+    assert "agent-sessions/claude-code" in output
 
 
 def test_closeout_manifests_declare_temporal_axes():

@@ -77,7 +77,10 @@ class SourceCLI:
         )
         parser.add_argument("--embedding-api-key", type=str, default=None, help="Embedding API key")
         parser.add_argument(
-            "--max-count", type=int, default=1000, help="Max items to index (default: 1000)"
+            "--max-count",
+            type=int,
+            default=-1,
+            help="Max items to index (-1 = unlimited, default)",
         )
         parser.add_argument(
             "--no-recompute",
@@ -220,9 +223,9 @@ class SourceCLI:
     ) -> list[Any]:
         chunks = list(reader.iter_chunks())
         max_count = getattr(args, "max_count", None)
-        if max_count is not None:
-            return chunks[:max_count]
-        return chunks
+        if max_count is None or max_count < 0:
+            return chunks
+        return chunks[:max_count]
 
     def _apply_arg_overrides(self, manifest: SourceManifest, args: argparse.Namespace) -> None:
         if getattr(args, "export_dir", None):

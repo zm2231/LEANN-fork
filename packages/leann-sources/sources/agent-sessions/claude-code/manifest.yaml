@@ -1,0 +1,41 @@
+name: claude-code
+category: agent-sessions
+display_name: Claude Code Sessions
+version: 0.1.0
+manifest_version: '1.0'
+reader: reader.ClaudeCodeSourceReader
+data:
+  type: filesystem
+  default_path: ~/.claude/projects
+  format: jsonl_tree
+auth:
+  type: none
+fields:
+  created_at:
+    source: created_at
+  modified_at:
+    source: modified_at
+  event_time:
+    source: event_time
+  author:
+    source: author
+  activity_type:
+    source: activity_type
+  participant_ids:
+    source: participant_ids
+  source_type:
+    value: claude_code
+  source_id:
+    source: source_id
+  source_document_id:
+    source: source_document_id
+  project_id:
+    source: project_id
+  parent_ref:
+    source: parent_ref
+  chunk_seq:
+    auto: row_index_within_source_document_id
+chunking:
+  granularity: message
+privacy:
+  tier: tier_1
