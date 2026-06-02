@@ -133,13 +133,89 @@ def get_model_token_limit(
     return default
 
 
-def truncate_to_token_limit(texts: list[str], token_limit: int) -> list[str]:
+# Embedding models whose true tokenizer IS OpenAI's cl100k_base. For these,
+# counting with tiktoken is exact, so no HuggingFace tokenizer is needed.
+_OPENAI_TIKTOKEN_MODELS = {
+    "text-embedding-3-small",
+    "text-embedding-3-large",
+    "text-embedding-ada-002",
+}
+
+# Short model aliases → HuggingFace repo id, for loading the model's own
+# tokenizer. bge-m3 tokenizes with an XLM-RoBERTa SentencePiece tokenizer that
+# produces ~1.16x more tokens than cl100k for the same text; counting with
+# cl100k under-counts and lets text silently exceed the model's real 8192-token
+# context window (observed: 8192 cl100k tokens = 9534 bge-m3 tokens).
+_HF_TOKENIZER_ALIASES = {
+    "bge-m3": "BAAI/bge-m3",
+}
+
+# Cache loaded tokenizers by key so we don't reload on every batch.
+_truncation_tokenizer_cache: dict[str, Any] = {}
+
+
+def _resolve_truncation_tokenizer(model_name: Optional[str]):
+    """Return ("hf", PreTrainedTokenizer) or ("tiktoken", Encoding).
+
+    Picks the model's OWN tokenizer when it can be identified/loaded, so the
+    token count matches what the embedding server actually tokenizes. Falls back
+    to cl100k_base when the model is an OpenAI model (where cl100k is correct) or
+    when the real tokenizer can't be loaded.
     """
-    Truncate texts to fit within token limit using tiktoken.
+
+    def _tiktoken():
+        cached = _truncation_tokenizer_cache.get("__tiktoken__")
+        if cached is None:
+            import tiktoken
+
+            cached = tiktoken.get_encoding("cl100k_base")
+            _truncation_tokenizer_cache["__tiktoken__"] = cached
+        return ("tiktoken", cached)
+
+    if not model_name:
+        return _tiktoken()
+
+    base = model_name.split(":")[0]  # strip ":latest" etc.
+    if base in _OPENAI_TIKTOKEN_MODELS:
+        return _tiktoken()
+
+    # Resolve to an HF repo id: explicit id (contains "/") or a known alias.
+    hf_id = model_name if "/" in model_name else _HF_TOKENIZER_ALIASES.get(base)
+    if not hf_id:
+        return _tiktoken()
+
+    cached = _truncation_tokenizer_cache.get(hf_id)
+    if cached is None:
+        try:
+            from transformers import AutoTokenizer
+
+            cached = AutoTokenizer.from_pretrained(hf_id)
+            _truncation_tokenizer_cache[hf_id] = cached
+        except Exception as e:
+            logger.warning(
+                f"Could not load real tokenizer for '{hf_id}' ({e}); "
+                "falling back to cl100k_base token counting (may under-count)"
+            )
+            return _tiktoken()
+    return ("hf", cached)
+
+
+def truncate_to_token_limit(
+    texts: list[str], token_limit: int, model_name: Optional[str] = None
+) -> list[str]:
+    """
+    Truncate texts to fit within a model's token limit.
+
+    Counts tokens with the model's OWN tokenizer when available (e.g. bge-m3's
+    SentencePiece tokenizer) so the count matches what the embedding server sees;
+    otherwise falls back to cl100k_base. For HuggingFace tokenizers the special
+    tokens the model adds at encode time ([CLS]/[SEP]) are reserved out of the
+    budget so the re-tokenized text on the server stays within `token_limit`.
 
     Args:
         texts: List of text strings to truncate
-        token_limit: Maximum number of tokens allowed
+        token_limit: Maximum number of tokens allowed (the model's real context)
+        model_name: Embedding model name, used to pick the correct tokenizer
 
     Returns:
         List of truncated texts (same length as input)
@@ -147,10 +223,28 @@ def truncate_to_token_limit(texts: list[str], token_limit: int) -> list[str]:
     if not texts:
         return []
 
-    import tiktoken
+    kind, tok = _resolve_truncation_tokenizer(model_name)
 
-    # Use tiktoken with cl100k_base encoding
-    enc = tiktoken.get_encoding("cl100k_base")
+    if kind == "hf":
+        # Reserve room for the special tokens the model adds on encode, so the
+        # server's re-tokenization (which re-adds them) stays within the limit.
+        reserve = tok.num_special_tokens_to_add(pair=False)
+        budget = max(1, token_limit - reserve)
+
+        def _encode(text):
+            return tok.encode(text, add_special_tokens=False)
+
+        def _decode(ids):
+            return tok.decode(ids, skip_special_tokens=True)
+    else:
+
+        def _encode(text):
+            return tok.encode(text)
+
+        def _decode(ids):
+            return tok.decode(ids)
+
+        budget = token_limit
 
     truncated_texts = []
     truncation_count = 0
@@ -158,29 +252,29 @@ def truncate_to_token_limit(texts: list[str], token_limit: int) -> list[str]:
     max_original_length = 0
 
     for i, text in enumerate(texts):
-        tokens = enc.encode(text)
+        tokens = _encode(text)
         original_length = len(tokens)
 
-        if original_length <= token_limit:
+        if original_length <= budget:
             # Text is within limit, keep as is
             truncated_texts.append(text)
         else:
-            # Truncate to token_limit
-            truncated_tokens = tokens[:token_limit]
-            truncated_text = enc.decode(truncated_tokens)
+            # Truncate to budget
+            truncated_tokens = tokens[:budget]
+            truncated_text = _decode(truncated_tokens)
             truncated_texts.append(truncated_text)
 
             # Track truncation statistics
             truncation_count += 1
-            tokens_removed = original_length - token_limit
+            tokens_removed = original_length - budget
             total_tokens_removed += tokens_removed
             max_original_length = max(max_original_length, original_length)
 
             # Log individual truncation at WARNING level (first few only)
             if truncation_count <= 3:
                 logger.warning(
-                    f"Text {i + 1} truncated: {original_length} → {token_limit} tokens "
-                    f"({tokens_removed} tokens removed)"
+                    f"Text {i + 1} truncated: {original_length} → {budget} tokens "
+                    f"({tokens_removed} tokens removed, {kind} tokenizer)"
                 )
             elif truncation_count == 4:
                 logger.warning("Further truncation warnings suppressed...")
@@ -189,12 +283,11 @@ def truncate_to_token_limit(texts: list[str], token_limit: int) -> list[str]:
     if truncation_count > 0:
         logger.warning(
             f"Truncation summary: {truncation_count}/{len(texts)} texts truncated "
-            f"(removed {total_tokens_removed} tokens total, longest was {max_original_length} tokens)"
+            f"(removed {total_tokens_removed} tokens total, longest was {max_original_length} tokens, "
+            f"{kind} tokenizer)"
         )
     else:
-        logger.debug(
-            f"No truncation needed - all {len(texts)} texts within {token_limit} token limit"
-        )
+        logger.debug(f"No truncation needed - all {len(texts)} texts within {budget} token budget")
 
     return truncated_texts
 
@@ -805,7 +898,7 @@ def compute_embeddings_openai(
     # Query token limit and apply truncation
     token_limit = get_model_token_limit(model_name, base_url=effective_base_url)
     logger.info(f"Using token limit: {token_limit} for model '{model_name}'")
-    texts = truncate_to_token_limit(texts, token_limit)
+    texts = truncate_to_token_limit(texts, token_limit, model_name=model_name)
 
     # OpenAI has limits on batch size and input length
     max_batch_size = 800  # Conservative batch size because the token limit is 300K
@@ -1121,7 +1214,7 @@ def compute_embeddings_ollama(
 
     # Apply truncation to all texts before batch processing
     # Function logs truncation details internally
-    texts = truncate_to_token_limit(texts, token_limit)
+    texts = truncate_to_token_limit(texts, token_limit, model_name=model_name)
 
     def get_batch_embeddings(batch_texts):
         """Get embeddings for a batch of texts using /api/embed endpoint."""
