@@ -87,6 +87,55 @@ def handle_request(request):
                         "description": "📋 Show all your indexed codebases - your personal code library! Use this to see what's available for search.",
                         "inputSchema": {"type": "object", "properties": {}},
                     },
+                    {
+                        "name": "search_sessions",
+                        "description": """🧠 Search across your local AI coding-agent session history (Claude Code, Codex, pi-agent).
+
+Queries the unified `coding-sessions` index built nightly by tools/build_coding_sessions.py.
+Supports:
+  - source filter (claude_code / codex / pi_agent)
+  - project filter (e.g. cadence-pipeline, studymill)
+  - natural-language time windows ("last week", "around new year", "in March")
+
+Returns chunks with session_path + session_id in metadata so you can open the full
+session log for context expansion via the Read tool.
+
+Examples:
+  - "auth error fix" agent=codex                           → debugging in codex sessions
+  - "what did claude do in cadence-pipeline last week"    → narrowed by project + time
+  - "around new year"                                      → temporal cut across all agents""",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "query": {
+                                    "type": "string",
+                                    "description": "Search query. May include natural-language time phrases.",
+                                },
+                                "agent": {
+                                    "type": "string",
+                                    "enum": ["claude_code", "codex", "pi_agent"],
+                                    "description": "Restrict to a single agent's sessions.",
+                                },
+                                "project": {
+                                    "type": "string",
+                                    "description": "Restrict to sessions launched in a project (matches project_id, e.g. 'studymill', 'cadence-pipeline').",
+                                },
+                                "top_k": {
+                                    "type": "integer",
+                                    "default": 10,
+                                    "minimum": 1,
+                                    "maximum": 50,
+                                    "description": "Max results.",
+                                },
+                                "index_name": {
+                                    "type": "string",
+                                    "default": "coding-sessions",
+                                    "description": "Override target index (default: coding-sessions).",
+                                },
+                            },
+                            "required": ["query"],
+                        },
+                    },
                 ]
             },
         }
@@ -137,6 +186,38 @@ def handle_request(request):
                     capture_output=True,
                     text=True,
                     cwd=_base_dir,
+                )
+
+            elif tool_name == "search_sessions":
+                if not args.get("query"):
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "result": {
+                            "content": [{"type": "text", "text": "Error: query is required"}]
+                        },
+                    }
+                index_name = args.get("index_name", "coding-sessions")
+                top_k = args.get("top_k", 10)
+                filters: dict[str, dict[str, str]] = {}
+                if agent := args.get("agent"):
+                    filters["source_type"] = {"==": agent}
+                if project := args.get("project"):
+                    filters["project_id"] = {"==": project}
+                cmd = [
+                    *_leann_cmd(),
+                    "search",
+                    index_name,
+                    args["query"],
+                    f"--top-k={top_k}",
+                    "--non-interactive",
+                    "--json",
+                    "--show-metadata",
+                ]
+                if filters:
+                    cmd.append(f"--metadata-filter={json.dumps(filters)}")
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, cwd=_base_dir
                 )
 
             return {
