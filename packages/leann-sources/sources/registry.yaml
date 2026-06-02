@@ -63,3 +63,24 @@ sources:
   manifest_path: messaging/whatsapp/manifest.yaml
   data_type: sqlite
   privacy_tier: tier_3
+- name: claude-code
+  category: agent-sessions
+  display_name: Claude Code Sessions
+  version: 0.1.0
+  manifest_path: agent-sessions/claude-code/manifest.yaml
+  data_type: filesystem
+  privacy_tier: tier_1
+- name: codex
+  category: agent-sessions
+  display_name: Codex Sessions
+  version: 0.1.0
+  manifest_path: agent-sessions/codex/manifest.yaml
+  data_type: filesystem
+  privacy_tier: tier_1
+- name: pi-agent
+  category: agent-sessions
+  display_name: Pi Agent Sessions
+  version: 0.1.0
+  manifest_path: agent-sessions/pi-agent/manifest.yaml
+  data_type: filesystem
+  privacy_tier: tier_1

@@ -22,6 +22,9 @@ SOURCE_TYPES = {
     "calendar",
     "chatgpt",
     "claude",
+    "claude_code",
+    "codex",
+    "pi_agent",
     "wechat",
     "whatsapp",
     "github",
@@ -262,7 +265,7 @@ def test_source_registry_catalog_manifests_cover_temporal_axes():
     cli = SourceCLI(sources_root)
     registry = build_registry(sources_root)
 
-    assert len(registry.entries) == 9
+    assert len(registry.entries) == 12
     for entry in registry.entries:
         manifest = cli.load_manifest(entry.name)
         assert "created_at" in manifest.fields, entry.name
