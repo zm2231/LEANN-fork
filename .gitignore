@@ -36,6 +36,8 @@ skip_reorder_comparison/
 analysis_results/
 build/
 .cache/
+.leann/
+tools/nightly_rebuild_coding_sessions.sh
 nprobe_logs/
 micro/results
 micro/contriever-INT8
