@@ -50,6 +50,17 @@ By default `leann build` is **incremental** — adds new files only. To rebuild 
 leann build my-docs --docs ./documents --force
 ```
 
+## Rebuild with stored config
+
+`leann rebuild <name>` re-runs a build using the config stored with the index (docs paths, embedding flags, chunking) — no need to re-type the original flags. Incremental delta by default; `--force` for a full rebuild from scratch (upstream #326).
+
+```bash
+leann rebuild my-docs            # incremental, reusing stored config
+leann rebuild my-docs --force    # full rebuild from scratch
+```
+
+Use this instead of remembering the original `leann build ...` invocation. (Differs from `build --force`, which still requires you to re-supply `--docs` and embedding flags.)
+
 ## Specialized readers
 
 Each emits canonical SIGNALS metadata (`created_at`, `modified_at`, `event_time`, `indexed_at`, `source_type`, `author`, etc. when available) so Wave 1/1.5 temporal + Wave 2 metadata-aware filters work downstream.
@@ -220,7 +231,8 @@ See the `leann-search` skill for the search surface.
 
 - *"build an index"* / *"index this folder"* → `leann build <name> --docs <path>` with the iq embedding flags
 - *"index my email/calendar/messages/browser"* → `leann index-<source>` (same embedding flags)
-- *"reindex"* / *"rebuild"* → add `--force`
+- *"reindex"* / *"rebuild"* → `leann rebuild <name>` (reuses stored config); `--force` for full rebuild
+- *"rebuild but I forgot the original flags"* → `leann rebuild <name>` (config is stored with the index)
 - *"index code"* → add `--use-ast-chunking`
 - *"index won't update"* → it's compact or HNSW+recompute; use `--force`
 - *"use a specific model"* → override `--embedding-model` + `--embedding-mode`
