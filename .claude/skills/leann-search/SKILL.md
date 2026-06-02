@@ -131,7 +131,7 @@ s.search(
     temporal_axis=None,                   # override routed axis: created_at | modified_at | event_time | indexed_at
 
     # — hybrid + misc —
-    gemma=1.0,                            # 1.0 = pure vector, 0.0 = pure BM25
+    vector_weight=1.0,                    # 1.0 = pure vector, 0.0 = pure BM25 (`gemma=` is a deprecated alias)
     batch_size=0,
     use_grep=False,
 )
@@ -167,9 +167,9 @@ jq '.backend_kwargs.is_recompute' .leann/indexes/<name>/documents.leann.meta.jso
 
 `complexity` is the ANN beam — larger = more candidates examined = slower but higher recall. Diminishing returns past 128 on HNSW.
 
-#### Hybrid weight (`gemma`)
+#### Hybrid weight (`vector_weight`)
 
-`gemma=1.0` (default) = pure vector. `gemma=0.0` = pure BM25. Mix:
+`vector_weight=1.0` (default) = pure vector. `vector_weight=0.0` = pure BM25. (The old `gemma=` kwarg still works as a deprecated alias but emits a `DeprecationWarning` — use `vector_weight=`.) BM25 is now FTS5-backed (SQLite virtual table, built once at index-build time or on-demand, memory-bounded — upstream sync). Mix:
 - **1.0** — semantic queries ("what did Jay say about X")
 - **0.7** — mostly semantic but you want exact terms to count (proper nouns, code symbols)
 - **0.3** — keyword-heavy queries with semantic safety net
@@ -257,6 +257,14 @@ hit_with_ctx = s.expand_context(hit, before=2, after=2)
 # hit_with_ctx.siblings → list[SearchResult]
 ```
 
+### Query logging (eval / replay)
+
+Set `LEANN_QUERY_LOG=<path>` in the environment and every `search()` appends one JSONL record (`ts`, `query`, `top_k`, result `id`/`score`, and the query `embedding` when one was computed). Useful for offline benchmark replay and capturing a real query stream. No code change needed — it's purely env-gated (upstream #325).
+
+```bash
+LEANN_QUERY_LOG=/tmp/queries.jsonl leann search my-docs "design feedback"
+```
+
 ## ReActAgent (Python)
 
 ```python
@@ -311,7 +319,7 @@ print(s.facets(["parent_ref"]))
 
 ### "Pure-keyword (no embeddings) search"
 ```python
-s.search(query, gemma=0.0)   # 0.0 = pure BM25, 1.0 = pure vector
+s.search(query, vector_weight=0.0)   # 0.0 = pure BM25, 1.0 = pure vector
 ```
 
 ## When the user asks
