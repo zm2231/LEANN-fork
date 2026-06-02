@@ -61,6 +61,8 @@ embedding_comparison_results/
 *.index
 *.bin
 *.old
+*.bm25.sqlite
+.leann/
 
 read_graph
 analyze_diskann_graph
