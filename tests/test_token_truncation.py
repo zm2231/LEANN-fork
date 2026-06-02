@@ -268,6 +268,72 @@ class TestTokenTruncation:
         )
 
 
+class TestRealTokenizerTruncation:
+    """Tests for model-aware truncation using the model's OWN tokenizer.
+
+    The default path counts with cl100k_base (tiktoken). For models like bge-m3
+    that tokenize with a denser SentencePiece tokenizer (~1.16x more tokens than
+    cl100k for the same text), counting with cl100k under-counts and lets text
+    exceed the model's real context window. Passing model_name selects the real
+    tokenizer so the count matches what the embedding server actually sees.
+    """
+
+    def test_bge_m3_truncation_respects_real_token_limit(self):
+        """Text truncated at bge-m3's 8192 limit must stay <= 8192 of ITS tokens.
+
+        Regression for: cl100k counted 10001 tokens (under 8192? no, but a
+        ~8192-cl100k text was 9534 bge-m3 tokens) so text overflowed the model's
+        real 8192 window and iq returned 400. With the real tokenizer the
+        truncated text (special tokens included) lands at exactly <= 8192.
+        """
+        pytest.importorskip("transformers")
+        from transformers import AutoTokenizer
+
+        try:
+            tok = AutoTokenizer.from_pretrained("BAAI/bge-m3")
+        except Exception:
+            pytest.skip("BAAI/bge-m3 tokenizer not available (offline)")
+
+        # Dense prose that expands under SentencePiece relative to cl100k.
+        sample = (
+            "The quick brown fox jumps over the lazy dog. Embeddings encode meaning. "
+            "Retrieval augmented generation grounds answers in retrieved context. "
+        ) * 400
+
+        # Precondition: this overflows bge-m3's real 8192 window before truncation.
+        before = len(tok.encode(sample, add_special_tokens=True))
+        assert before > 8192, f"test setup: sample should overflow 8192 (was {before})"
+
+        out = truncate_to_token_limit([sample], 8192, model_name="BAAI/bge-m3")[0]
+        after = len(tok.encode(out, add_special_tokens=True))
+        assert after <= 8192, f"truncated bge-m3 tokens (with specials) must be <=8192, got {after}"
+
+    def test_model_name_alias_resolves_to_hf_tokenizer(self):
+        """The short alias 'bge-m3' resolves to the real HF tokenizer, not tiktoken."""
+        pytest.importorskip("transformers")
+        from leann.embedding_compute import _resolve_truncation_tokenizer
+
+        try:
+            kind, _ = _resolve_truncation_tokenizer("bge-m3")
+        except Exception:
+            pytest.skip("tokenizer load failed (offline)")
+        assert kind == "hf", "bge-m3 alias should select the model's own tokenizer"
+
+    def test_openai_model_uses_tiktoken(self):
+        """OpenAI embedding models keep cl100k_base (the correct tokenizer for them)."""
+        from leann.embedding_compute import _resolve_truncation_tokenizer
+
+        kind, _ = _resolve_truncation_tokenizer("text-embedding-3-small")
+        assert kind == "tiktoken"
+
+    def test_unknown_model_falls_back_to_tiktoken(self):
+        """Unknown/no model name falls back to cl100k_base (no crash)."""
+        from leann.embedding_compute import _resolve_truncation_tokenizer
+
+        assert _resolve_truncation_tokenizer(None)[0] == "tiktoken"
+        assert _resolve_truncation_tokenizer("some-unknown-model")[0] == "tiktoken"
+
+
 class TestLMStudioHybridDiscovery:
     """Tests for LM Studio integration in get_model_token_limit() hybrid discovery.
 
