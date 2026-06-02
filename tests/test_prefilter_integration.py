@@ -126,6 +126,7 @@ def _searcher(selectivity):
     searcher._warmup = False
     searcher._use_daemon = False
     searcher._daemon_ttl_seconds = 0
+    searcher._query_log_path = None
     searcher.bm25_scorer = None
     return searcher
 
