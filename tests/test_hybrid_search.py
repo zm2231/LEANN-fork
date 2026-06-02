@@ -148,8 +148,10 @@ class TestHybridSearch:
         assert len(hybrid) > 0
 
         # Hybrid results should potentially differ from pure approaches
-        # (though with small dataset, there might be overlap)
-        assert all(r.score > 0 for r in hybrid)
+        # (though with small dataset, there might be overlap).
+        # Scores are min-max normalized per source before fusing, so the
+        # lowest-ranked candidate can floor to exactly 0.0 — assert non-negative.
+        assert all(r.score >= 0 for r in hybrid)
 
     def test_hybrid_search_with_metadata_filters(self, sample_index):
         """Test hybrid search combined with metadata filtering."""

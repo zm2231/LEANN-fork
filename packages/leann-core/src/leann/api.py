@@ -1929,18 +1929,33 @@ class LeannSearcher:
             logger.info(f"  🌟 Hybrid search enabled with vector_weight={vector_weight}")
             bm25_weight = 1.0 - vector_weight
             bm25_results = self._bm25_search(query, top_k)
-            hybrid_scores: dict[str, float] = {}
-            # Add vector search scores (weighted by vector_weight)
+            # Min-max normalize each source to [0,1] BEFORE fusing. Vector scores
+            # (cosine/IP, ~[0,1]) and FTS5 bm25() scores live on different,
+            # incomparable scales (bm25() is unbounded, often 2-15), so a raw
+            # linear blend was BM25-dominated at every weight — vector_weight=0.7
+            # still returned ~pure-BM25 results. Normalizing makes vector_weight
+            # an honest linear blend again.
+            def _minmax(raw: dict[str, float]) -> dict[str, float]:
+                if not raw:
+                    return {}
+                lo, hi = min(raw.values()), max(raw.values())
+                if hi - lo < 1e-12:
+                    return dict.fromkeys(raw, 1.0)
+                return {k: (v - lo) / (hi - lo) for k, v in raw.items()}
+
+            vec_raw: dict[str, float] = {}
             if "labels" in results and "distances" in results:
                 for doc_id, score in zip(results["labels"][0], results["distances"][0]):
-                    hybrid_scores[doc_id] = vector_weight * score
-            # Add BM25 scores (weighted by bm25_weight)
-            for bm25_result in bm25_results:
-                doc_id = bm25_result.id
-                if doc_id in hybrid_scores:
-                    hybrid_scores[doc_id] += bm25_weight * bm25_result.score
-                else:
-                    hybrid_scores[doc_id] = bm25_weight * bm25_result.score
+                    vec_raw[doc_id] = score
+            bm25_raw = {r.id: r.score for r in bm25_results}
+            vec_norm = _minmax(vec_raw)
+            bm25_norm = _minmax(bm25_raw)
+
+            hybrid_scores: dict[str, float] = {
+                doc_id: vector_weight * vec_norm.get(doc_id, 0.0)
+                + bm25_weight * bm25_norm.get(doc_id, 0.0)
+                for doc_id in set(vec_norm) | set(bm25_norm)
+            }
 
             sorted_hybrid = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
             results["labels"] = [[doc_id for doc_id, _ in sorted_hybrid]]
