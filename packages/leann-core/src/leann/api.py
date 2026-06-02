@@ -11,6 +11,7 @@ import re
 import subprocess
 import time
 import warnings
+from abc import ABC, abstractmethod
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -514,80 +515,93 @@ class PassageManager:
         return self._total_count
 
 
-class BM25Scorer:
-    def __init__(self, k1: float = 1.2, b: float = 0.75):
-        self.k1 = k1
-        self.b = b
-        self.doc_freqs = None  # How many docs contain each term (DF)
-        self.doc_lengths = {}  # How long each doc is (in words)
-        self.word_counts = {}  # How many times each word appears in each doc (TF)
-        self.avg_doc_length = None
-        self.corpus_size = None
-        self.idlist = set()  # List of all document IDs for easier searching
+class BM25Index(ABC):
+    """Minimal contract for a BM25-style sparse index over LEANN passages."""
 
-    def _tokenize(self, text: str) -> list[str]:
-        return re.sub(r"[^\w\s]", "", text).lower().split()
+    @abstractmethod
+    def fit(self, documents: list[dict[str, Any]]) -> None:
+        """Build the index from a corpus.
 
-    def fit(self, documents: list[dict[str, Any]]):
+        `documents` is a list of `{"id": str, "text": str, ...}` entries. Extra
+        fields are ignored by BM25 implementations but preserved by the caller
+        for use elsewhere.
         """
-        Build BM25 statistics from a document corpus.
-        Must be called before scoring.
+
+    @abstractmethod
+    def search(self, query: str, top_k: int = 5) -> list["SearchResult"]:
+        """Return up to `top_k` SearchResult entries ranked by descending score.
+
+        Returned SearchResults have `id` and `score` populated; `text` and
+        `metadata` are filled in by `LeannSearcher` from the passage store.
         """
-        self.corpus_size = len(documents)
-        self.doc_lengths = {}
-        self.word_counts = {}
-        self.idlist = set()
-        doc_freqs = defaultdict(int)
 
-        for doc_data in documents:
-            doc_id = doc_data["id"]
-            words = self._tokenize(doc_data["text"])
-            doc_length = len(words)
-            self.doc_lengths[doc_id] = doc_length
 
-            unique_words = set(words)
-            for word in unique_words:
-                doc_freqs[word] += 1
-            self.word_counts[doc_id] = dict(Counter(words))
-            self.idlist.add(doc_id)
+class Fts5BM25Index(BM25Index):
+    """BM25 over a SQLite FTS5 virtual table, persisted on disk.
 
-        self.doc_freqs = dict(doc_freqs)
-        self.avg_doc_length = sum(self.doc_lengths.values()) / len(self.doc_lengths)
+    Built once at `leann build` time, queried memory-bounded at search time.
+    SQLite owns the on-disk term/posting data; queries hit `bm25()` directly.
+    """
 
-    def score(self, query_words: list[str], document_id: str) -> float:
-        if (
-            self.doc_freqs is None
-            or self.doc_lengths == {}
-            or self.word_counts == {}
-            or self.avg_doc_length is None
-            or self.corpus_size is None
-        ):
-            raise ValueError("BM25 model not fitted. Call fit() before scoring.")
+    # SQLite's FTS5 bm25() returns lower-is-better. We negate so the rest of
+    # LeannSearcher (and the hybrid fusion math) can keep higher-is-better.
+    _SCHEMA = (
+        "CREATE VIRTUAL TABLE bm25_passages USING fts5("
+        "id UNINDEXED, text, tokenize='unicode61 remove_diacritics 2'"
+        ")"
+    )
 
-        passage_words = self.word_counts[document_id]
-        passage_length = sum(passage_words.values())
-        score = 0.0
-        for word in query_words:
-            if word not in self.doc_freqs:
-                continue
-            word_freq = passage_words[word] if word in passage_words else 0
-            idf = np.log(
-                (self.corpus_size - self.doc_freqs[word] + 0.5) / (self.doc_freqs[word] + 0.5) + 1
+    def __init__(self, db_path: str):
+        self._db_path = db_path
+        self._conn: Optional[Any] = None
+
+    def _connect(self):
+        import sqlite3
+
+        if self._conn is None:
+            self._conn = sqlite3.connect(self._db_path)
+        return self._conn
+
+    def fit(self, documents: list[dict[str, Any]]) -> None:
+        import sqlite3
+
+        # Fresh DB every fit — fit() is a one-shot bulk-load.
+        if os.path.exists(self._db_path):
+            os.unlink(self._db_path)
+        conn = sqlite3.connect(self._db_path)
+        try:
+            conn.execute(self._SCHEMA)
+            conn.executemany(
+                "INSERT INTO bm25_passages(id, text) VALUES (?, ?)",
+                ((d["id"], d.get("text", "")) for d in documents),
             )
-            tf = (word_freq * (self.k1 + 1)) / (
-                word_freq + self.k1 * (1 - self.b + self.b * (passage_length / self.avg_doc_length))
-            )
-            score += idf * tf
-        return score
+            conn.commit()
+        finally:
+            conn.close()
 
-    def search(self, query: str, top_k: int = 5) -> list[SearchResult]:
-        query_words = self._tokenize(query)
-        scores = {doc_id: self.score(query_words, doc_id) for doc_id in self.idlist}
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    def search(self, query: str, top_k: int = 5) -> list["SearchResult"]:
+        # Strip punctuation, lowercase, OR the terms together. Avoids FTS5
+        # query syntax surprises (`:`, `*`, etc.) for natural-language queries.
+        terms = re.sub(r"[^\w\s]", "", query).lower().split()
+        if not terms:
+            return []
+        fts5_query = " OR ".join(terms)
+        conn = self._connect()
+        rows = conn.execute(
+            "SELECT id, -bm25(bm25_passages) AS score "
+            "FROM bm25_passages WHERE bm25_passages MATCH ? "
+            "ORDER BY score DESC LIMIT ?",
+            (fts5_query, top_k),
+        ).fetchall()
         return [
-            SearchResult(id=doc_id, score=score, text="", metadata={})
-            for doc_id, score in sorted_scores[:top_k]
+            SearchResult(id=doc_id, score=float(score), text="", metadata={})
+            for doc_id, score in rows
         ]
+
+    def close(self) -> None:
+        if self._conn is not None:
+            self._conn.close()
+            self._conn = None
 
 
 class LeannBuilder:
@@ -598,8 +612,15 @@ class LeannBuilder:
         dimensions: Optional[int] = None,
         embedding_mode: str = "sentence-transformers",
         embedding_options: Optional[dict[str, Any]] = None,
+        prebuild_bm25: bool = False,
+        bm25_backend: str = "fts5",
         **backend_kwargs,
     ):
+        if bm25_backend != "fts5":
+            logger.warning(f"bm25_backend={bm25_backend!r} is deprecated; using 'fts5'.")
+            bm25_backend = "fts5"
+        self.bm25_backend = bm25_backend
+        self.prebuild_bm25 = prebuild_bm25 or bm25_backend == "fts5"
         self.backend_name = backend_name
         # Normalize incompatible combinations early (for consistent metadata)
         if backend_name == "hnsw":
@@ -815,8 +836,27 @@ class LeannBuilder:
             is_recompute = self.backend_kwargs.get("is_recompute", True)
             meta_data["is_compact"] = is_compact
             meta_data["is_pruned"] = bool(is_recompute)
+
+        if self.prebuild_bm25:
+            self._build_bm25_fts5(index_dir, index_name)
+            meta_data["bm25_backend"] = "fts5"
+            meta_data["bm25_db"] = f"{index_name}.bm25.sqlite"
+
         with open(leann_meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
+
+    def _build_bm25_fts5(self, index_dir: Path, index_name: str) -> None:
+        """Build a SQLite FTS5 BM25 index alongside the vector index.
+
+        Queries via SQLite's bm25() function — memory-bounded at search time
+        (the term/posting data lives on disk, not in RAM). Replaces
+        BM25Scorer's full-corpus-in-memory model for paper-scale corpora.
+        """
+        db_path = index_dir / f"{index_name}.bm25.sqlite"
+        index = Fts5BM25Index(str(db_path))
+        index.fit(self.chunks)
+        index.close()
+        logger.info(f"Wrote BM25 FTS5 index to {db_path}")
 
     def build_index_from_arrays(self, index_path: str, ids: list, embeddings: np.ndarray):
         """Build an index from pre-computed embedding arrays.
@@ -1408,7 +1448,7 @@ class LeannSearcher:
         self.backend_impl: LeannBackendSearcherInterface = backend_factory.searcher(
             index_path, **final_kwargs
         )
-        self.bm25_scorer: Optional[BM25Scorer] = None
+        self.bm25_scorer: Optional[BM25Index] = None
 
         # Optional one-shot warmup at construction time to hide cold-start latency.
         if self._warmup:
@@ -1521,7 +1561,7 @@ class LeannSearcher:
         context_window: int = 0,
         batch_size: int = 0,
         use_grep: bool = False,
-        gemma: float = 1.0,
+        vector_weight: float = 1.0,
         provider_options: Optional[dict[str, Any]] = None,
         enable_temporal: bool = False,
         temporal_strict: bool = False,
@@ -1560,7 +1600,9 @@ class LeannSearcher:
             diversify_by: Metadata field or fields used to cap results per group after scoring.
             max_per_group: Maximum number of results to keep for each diversify_by group.
             context_window: Number of adjacent sibling chunks to attach before and after each hit.
-            gemma: Weight of vector search results in hybrid search (0.0-1.0), 1 = pure vector search, 0 = pure keyword search
+            vector_weight: Weight of vector search in hybrid scoring (0.0-1.0).
+                1.0 = pure vector search (default), 0.0 = pure BM25 keyword search,
+                anything in between linearly fuses the two.
             enable_temporal: When True, parse natural-language time expressions from the query
                 into axis-routed temporal metadata filters and embed the stripped semantic query.
             temporal_strict: When True, require the routed/overridden temporal axis to exist
@@ -1570,11 +1612,23 @@ class LeannSearcher:
             temporal_overscan: Candidate multiplier used when temporal parsing adds filters
                 (top_k * temporal_overscan is fetched before filtering).
             temporal_now: Optional reference time for deterministic temporal parsing.
-            **kwargs: Backend-specific parameters
+            **kwargs: Backend-specific parameters. Accepts a deprecated `gemma=` alias
+                for `vector_weight`; passing it emits a DeprecationWarning.
 
         Returns:
             List of SearchResult objects, or (results, diagnostics) when explain_filters=True.
         """
+        # Accept the legacy `gemma=` kwarg (typo of "gamma") as a deprecated alias
+        # for vector_weight. Pop before forwarding to backend so it doesn't leak.
+        if "gemma" in kwargs:
+            warnings.warn(
+                "search(gemma=...) is deprecated and will be removed in a future release; "
+                "use vector_weight= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            vector_weight = kwargs.pop("gemma")
+
         if prefilter not in {"auto", "always", "never"}:
             raise ValueError("prefilter must be one of 'auto', 'always', or 'never'")
         if max_per_group < 1:
@@ -1709,7 +1763,7 @@ class LeannSearcher:
             logger.warning(f"  ✅ Auto-adjusted top_k to {top_k} to match available documents")
 
         # Handle pure keyword search
-        if gemma == 0.0:
+        if vector_weight == 0.0:
             start_time = time.time()
             bm25_results = self._bm25_search(query, top_k)
             # Convert BM25 results to the expected format
@@ -1860,22 +1914,22 @@ class LeannSearcher:
             )
 
         # Handle hybrid search
-        if 0.0 < gemma < 1.0:
-            logger.info(f"  🌟 Hybrid search enabled with gemma={gemma}")
-            BM25_WEIGHT = 1.0 - gemma
+        if 0.0 < vector_weight < 1.0:
+            logger.info(f"  🌟 Hybrid search enabled with vector_weight={vector_weight}")
+            bm25_weight = 1.0 - vector_weight
             bm25_results = self._bm25_search(query, top_k)
             hybrid_scores: dict[str, float] = {}
-            # Add vector search scores (weighted by gemma)
+            # Add vector search scores (weighted by vector_weight)
             if "labels" in results and "distances" in results:
                 for doc_id, score in zip(results["labels"][0], results["distances"][0]):
-                    hybrid_scores[doc_id] = gemma * score
-            # Add BM25 scores (weighted by BM25_WEIGHT)
+                    hybrid_scores[doc_id] = vector_weight * score
+            # Add BM25 scores (weighted by bm25_weight)
             for bm25_result in bm25_results:
                 doc_id = bm25_result.id
                 if doc_id in hybrid_scores:
-                    hybrid_scores[doc_id] += BM25_WEIGHT * bm25_result.score
+                    hybrid_scores[doc_id] += bm25_weight * bm25_result.score
                 else:
-                    hybrid_scores[doc_id] = BM25_WEIGHT * bm25_result.score
+                    hybrid_scores[doc_id] = bm25_weight * bm25_result.score
 
             sorted_hybrid = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
             results["labels"] = [[doc_id for doc_id, _ in sorted_hybrid]]
@@ -1968,17 +2022,58 @@ class LeannSearcher:
         )
 
     def _init_bm25(self) -> None:
-        """Initialize BM25 scorer"""
-        self.bm25_scorer = BM25Scorer()
-        # Load all the files directly
+        """Initialize a BM25Index, preferring a build-time artifact when present."""
+        backend = self.meta_data.get("bm25_backend")
+        meta_dir = Path(self.meta_path_str).parent
+
+        if backend == "fts5":
+            db_name = self.meta_data.get("bm25_db")
+            if db_name:
+                db_path = meta_dir / db_name
+                if db_path.exists():
+                    self.bm25_scorer = Fts5BM25Index(str(db_path))
+                    logger.info(f"Using FTS5 BM25 index at {db_path}")
+                    return
+                logger.warning(
+                    f"meta.json says bm25_backend=fts5 but {db_path} is missing; "
+                    f"falling back to fit-on-search."
+                )
+
+        # No FTS5 artifact: build one on the fly from passages.
+        db_path = meta_dir / (Path(self.meta_path_str).stem.replace(".meta", "") + ".bm25.sqlite")
+        index = Fts5BM25Index(str(db_path))
         passages = []
         for passage_file in self.passage_manager.passage_files.values():
-            with open(passage_file, encoding="utf-8") as f:
-                for line in f:
-                    if line.strip():
-                        data = json.loads(line)
-                        passages.append(data)
-        self.bm25_scorer.fit(passages)
+            try:
+                with open(passage_file, encoding="utf-8") as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                passages.append(json.loads(line))
+                            except json.JSONDecodeError as exc:
+                                logger.warning(f"Skipping malformed JSONL in {passage_file}: {exc}")
+            except FileNotFoundError:
+                logger.warning(f"Passage file missing: {passage_file}")
+
+        if not passages:
+            logger.error(
+                "No passages found for on-demand BM25 index. "
+                "BM25/hybrid search will return empty results. "
+                "Re-run 'leann build' to regenerate passage files."
+            )
+            return
+
+        try:
+            index.fit(passages)
+        except (PermissionError, OSError) as exc:
+            logger.error(
+                f"Cannot write BM25 index to {db_path}: {exc}. "
+                f"Ensure the index directory is writable, or rebuild with prebuild_bm25=True."
+            )
+            return
+
+        self.bm25_scorer = index
+        logger.info(f"Built FTS5 BM25 index on-demand at {db_path}")
 
     def _bm25_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
         """Perform BM25 search on raw passages"""
@@ -2050,34 +2145,6 @@ class LeannSearcher:
                 "grep command not found. Please install grep or use semantic search."
             )
 
-    def _python_regex_search(self, query: str, top_k: int = 5) -> list[SearchResult]:
-        """Fallback regex search"""
-        jsonl_file = self._find_jsonl_file()
-        if not jsonl_file:
-            raise FileNotFoundError("No .jsonl file found")
-
-        pattern = re.compile(re.escape(query), re.IGNORECASE)
-        matches = []
-
-        with open(jsonl_file, encoding="utf-8") as f:
-            for line_num, line in enumerate(f, 1):
-                if pattern.search(line):
-                    try:
-                        data = json.loads(line.strip())
-                        matches.append(
-                            SearchResult(
-                                id=data.get("id", str(line_num)),
-                                text=data.get("text", ""),
-                                metadata=data.get("metadata", {}),
-                                score=float(len(pattern.findall(data.get("text", "")))),
-                            )
-                        )
-                    except json.JSONDecodeError:
-                        continue
-
-        matches.sort(key=lambda x: x.score, reverse=True)
-        return matches[:top_k]
-
     def cleanup(self):
         """Explicitly cleanup embedding server and backend index resources.
         This method should be called after you're done using the searcher,
@@ -2141,9 +2208,17 @@ class LeannChat:
         metadata_filters: Optional[dict[str, dict[str, Union[str, int, float, bool, list]]]] = None,
         batch_size: int = 0,
         use_grep: bool = False,
-        gemma: float = 1.0,
+        vector_weight: float = 1.0,
         **search_kwargs,
     ):
+        if "gemma" in search_kwargs:
+            warnings.warn(
+                "ask(gemma=...) is deprecated; use vector_weight= instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            vector_weight = search_kwargs.pop("gemma")
+
         if llm_kwargs is None:
             llm_kwargs = {}
         search_time = time.time()
@@ -2158,7 +2233,7 @@ class LeannChat:
             expected_zmq_port=expected_zmq_port,
             metadata_filters=metadata_filters,
             use_grep=use_grep,
-            gemma=gemma,
+            vector_weight=vector_weight,
             batch_size=batch_size,
             **search_kwargs,
         )
