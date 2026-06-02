@@ -1771,8 +1771,9 @@ class LeannSearcher:
             )
             logger.warning(f"  ✅ Auto-adjusted top_k to {top_k} to match available documents")
 
-        # Initialize so it's in scope for the query-log path even when only BM25 runs.
-        query_embedding: Optional[np.ndarray] = None
+        # query_embedding is a search() param (defaults None, so always in scope for
+        # the query-log/BM25 paths). multi_search may pass a precomputed value —
+        # do NOT reset it here, or the batched-embedding optimization is discarded.
 
         # Handle pure keyword search
         if vector_weight == 0.0:
@@ -2072,7 +2073,7 @@ class LeannSearcher:
         top_k: int = 5,
         provider_options: Optional[dict[str, Any]] = None,
         **kwargs,
-    ) -> list[list[SearchResult]]:
+    ) -> list[list[SearchResult] | tuple[list[SearchResult], dict[str, Any]]]:
         """Search many queries, embedding them all in ONE backend call.
 
         For bulk/eval workloads this pays the per-query embedding round-trip
@@ -2084,9 +2085,19 @@ class LeannSearcher:
         """
         if not queries:
             return []
-        # enable_temporal strips time tokens from each query BEFORE embedding, so
-        # we can't pre-embed the literal queries — fall back to per-query search.
-        if kwargs.get("enable_temporal"):
+        # Fall back to per-query search when a precomputed embedding wouldn't be
+        # used or wouldn't match: enable_temporal strips time tokens from the query
+        # BEFORE embedding; use_grep and pure-BM25 (vector_weight==0) do no vector
+        # embedding at all.
+        # Also fall back for recompute mode: the query-embed batching saves little
+        # there (per-query node recompute dominates) and avoids a zmq-port/daemon
+        # inconsistency between the batched embed and the per-query searches.
+        if (
+            self.recompute_embeddings
+            or kwargs.get("enable_temporal")
+            or kwargs.get("use_grep")
+            or kwargs.get("vector_weight") == 0.0
+        ):
             return [
                 self.search(q, top_k=top_k, provider_options=provider_options, **kwargs)
                 for q in queries
