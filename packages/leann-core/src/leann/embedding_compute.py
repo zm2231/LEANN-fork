@@ -239,7 +239,11 @@ def truncate_to_token_limit(
     else:
 
         def _encode(text):
-            return tok.encode(text)
+            # disallowed_special=() so literal "<|endoftext|>" / "<|im_start|>" /
+            # similar strings that appear in real content (agent session logs,
+            # tokenization tutorials, model output examples) are tokenized as
+            # ordinary text instead of raising.
+            return tok.encode(text, disallowed_special=())
 
         def _decode(ids):
             return tok.decode(ids)
