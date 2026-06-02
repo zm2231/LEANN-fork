@@ -14,6 +14,21 @@ Three CLI entry points + Python API. Embeddings flow through iq at `http://100.1
 | Multi-turn ReAct agent (single or multi-index) | `leann react` |
 | Programmatic from Python | `LeannSearcher.search()` |
 
+## Capabilities at a glance
+
+All opt-in, all composable in a single `search()` call:
+
+- **Vector search** — dense ANN over bge-m3 embeddings (default).
+- **Hybrid search** — `vector_weight` blends vector + BM25/FTS5 keyword (1.0 = pure vector, 0.0 = pure keyword). Scores are **min-max normalized per source** before fusing, so the weight is an honest linear blend (a raw blend was BM25-dominated at every weight — fixed 2026-06). L2 indexes are negated first; cosine/IP unaffected.
+- **Metadata filters** — `metadata_filters={"field": {"op": value}}`. Operators: `==, !=, <, <=, >, >=, in, not_in, contains, starts_with, ends_with, is_true, is_false` (datetime-aware on ISO 8601). Multiple fields = AND; `{">=": a, "<": b}` on one field = range. Full reference below.
+- **Sparse-filter prefilter** — `prefilter="auto"` brute-force-scores tiny filtered subsets (selectivity <5%) to avoid ANN false-zeros.
+- **NL temporal** — `enable_temporal=True` parses "last week" / "in January" into axis-routed time filters (created_at / modified_at / event_time / indexed_at).
+- **Diversify** — `diversify_by="source_document_id", max_per_group=N` caps results per group.
+- **Context window** — `context_window=N` attaches N sibling chunks before+after each hit.
+- **Facets** — `s.facets([...])` returns corpus value counts for filter authoring.
+- **Explain** — `explain_filters=True` returns `(results, diagnostics)` with selectivity + routing.
+- **Query log** — `LEANN_QUERY_LOG=<path>` appends a JSONL record per search for replay.
+
 ## `leann search` — fast retrieval
 
 ```bash
