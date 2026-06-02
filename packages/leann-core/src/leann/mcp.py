@@ -89,29 +89,58 @@ def handle_request(request):
                     },
                     {
                         "name": "get_session",
-                        "description": """📄 Read a full agent session log (Claude Code / Codex / pi-agent) by session_id or session_path.
+                        "description": """📄 Open an agent session log (Claude Code / Codex / pi-agent) with context-efficient pagination.
 
-Pairs with `search_sessions` — pass the `session_path` from a search result for an exact lookup,
-or pass `session_id` to do a filename-based search across the on-disk session stores.
+Two modes:
+  - **anchor**: pass `event_id` (from a search_sessions chunk's source_id) to land directly
+    at that event with ±`context_events` surrounding it. This is the recommended flow.
+  - **paginate**: pass `start_line` + `line_count` to browse the file linearly.
 
-Returns the raw JSONL bytes (one event per line) so the caller can expand context around a chunk.""",
+Default `format=compact` returns one line per event: `[lineno] role/type @timestamp — preview`.
+Switch to `format=raw` to get original JSONL (much larger, use sparingly).
+
+The response header always shows: total_lines, returned range, truncation status. Use
+`get_session` again with new start_line to walk the file without dumping it all into context.""",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "session_path": {
                                     "type": "string",
-                                    "description": "Absolute path to the session file (preferred — from search_sessions `extra.session_path`).",
+                                    "description": "Absolute path to the session file (from search_sessions `extra.session_path`).",
                                 },
                                 "session_id": {
                                     "type": "string",
-                                    "description": "Session id; falls back to searching `~/.claude/projects/`, `~/.codex/sessions/`, and `~/.pi/agent/sessions/` for a matching filename.",
+                                    "description": "Session id (filename-based glob across ~/.claude/projects, ~/.codex/sessions, ~/.pi/agent/sessions) — used when session_path is not provided.",
                                 },
-                                "max_bytes": {
+                                "event_id": {
+                                    "type": "string",
+                                    "description": "Anchor at this event id (substring match within a line). Combines with `context_events`.",
+                                },
+                                "context_events": {
                                     "type": "integer",
-                                    "default": 200000,
-                                    "minimum": 1024,
-                                    "maximum": 5000000,
-                                    "description": "Cap returned bytes (default ~200 KB). Set higher for long sessions.",
+                                    "default": 10,
+                                    "minimum": 0,
+                                    "maximum": 200,
+                                    "description": "When `event_id` is given, return this many events on each side. Default 10 → 21 events total.",
+                                },
+                                "start_line": {
+                                    "type": "integer",
+                                    "default": 0,
+                                    "minimum": 0,
+                                    "description": "0-indexed first line to return (ignored when `event_id` is set).",
+                                },
+                                "line_count": {
+                                    "type": "integer",
+                                    "default": 50,
+                                    "minimum": 1,
+                                    "maximum": 500,
+                                    "description": "Max lines to return when not anchored. Default 50.",
+                                },
+                                "format": {
+                                    "type": "string",
+                                    "enum": ["compact", "raw"],
+                                    "default": "compact",
+                                    "description": "compact = one-line preview per event (default, context-cheap). raw = original JSONL.",
                                 },
                             },
                         },
@@ -222,7 +251,11 @@ Examples:
 
                 session_path = args.get("session_path")
                 session_id = args.get("session_id")
-                max_bytes = int(args.get("max_bytes", 200_000))
+                event_id = args.get("event_id")
+                context_events = int(args.get("context_events", 10))
+                start_line = int(args.get("start_line", 0))
+                line_count = int(args.get("line_count", 50))
+                fmt = args.get("format", "compact")
                 if not session_path and not session_id:
                     return {
                         "jsonrpc": "2.0",
@@ -247,13 +280,14 @@ Examples:
                         Path.home() / ".codex" / "sessions",
                         Path.home() / ".pi" / "agent" / "sessions",
                     ]
+                    bare = session_id.split(":", 1)[0]
                     for root in search_roots:
                         if not root.exists():
                             continue
                         for pattern in (
-                            f"**/{session_id}.jsonl",
-                            f"**/*{session_id}*.jsonl",
-                            f"**/*{session_id}*.json",
+                            f"**/{bare}.jsonl",
+                            f"**/*{bare}*.jsonl",
+                            f"**/*{bare}*.json",
                         ):
                             hits = list(root.glob(pattern))
                             if hits:
@@ -274,10 +308,101 @@ Examples:
                             ]
                         },
                     }
-                data = resolved.read_bytes()
-                truncated = len(data) > max_bytes
-                body = data[:max_bytes].decode("utf-8", errors="replace")
-                header = f"# session: {resolved}\n# bytes: {len(data)} (truncated={truncated}, max_bytes={max_bytes})\n"
+
+                with resolved.open("r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.readlines()
+                total = len(lines)
+
+                if event_id:
+                    anchor = next(
+                        (i for i, line in enumerate(lines) if event_id in line),
+                        None,
+                    )
+                    if anchor is None:
+                        return {
+                            "jsonrpc": "2.0",
+                            "id": request.get("id"),
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": f"# session: {resolved}\n# total_lines: {total}\n# event_id {event_id!r} not found in this session",
+                                    }
+                                ]
+                            },
+                        }
+                    lo = max(0, anchor - context_events)
+                    hi = min(total, anchor + context_events + 1)
+                    mode_desc = f"anchor=event_id:{event_id} (line {anchor}); ±{context_events} → lines {lo}-{hi - 1}"
+                else:
+                    lo = max(0, min(start_line, total))
+                    hi = min(total, lo + max(1, line_count))
+                    mode_desc = f"paginate start_line={lo} line_count={hi - lo}"
+
+                selected = lines[lo:hi]
+
+                if fmt == "raw":
+                    body = "".join(selected)
+                else:
+                    rendered: list[str] = []
+                    for offset, line in enumerate(selected):
+                        line_no = lo + offset
+                        try:
+                            ev = json.loads(line)
+                        except Exception:
+                            rendered.append(f"[{line_no}] <unparsed> {line.rstrip()[:200]}")
+                            continue
+                        ts = (
+                            ev.get("timestamp")
+                            or ev.get("created_at")
+                            or (ev.get("payload") or {}).get("timestamp")
+                            or ""
+                        )
+                        kind = ev.get("type") or "?"
+                        payload = ev.get("payload") if isinstance(ev.get("payload"), dict) else {}
+                        msg = ev.get("message") if isinstance(ev.get("message"), dict) else {}
+                        role = (
+                            ev.get("role")
+                            or msg.get("role")
+                            or payload.get("role")
+                            or payload.get("type")
+                            or kind
+                        )
+                        preview_src = (
+                            ev.get("content")
+                            or payload.get("output")
+                            or payload.get("text")
+                            or msg.get("content")
+                            or ev.get("text")
+                            or ""
+                        )
+                        if isinstance(preview_src, list):
+                            parts: list[str] = []
+                            for block in preview_src:
+                                if isinstance(block, dict):
+                                    parts.append(str(block.get("text") or block.get("type") or ""))
+                                else:
+                                    parts.append(str(block))
+                            preview = " ".join(p for p in parts if p)
+                        elif isinstance(preview_src, dict):
+                            preview = json.dumps(preview_src)[:200]
+                        else:
+                            preview = str(preview_src)
+                        preview = " ".join(preview.split())[:200]
+                        ev_id = ev.get("id") or payload.get("id") or payload.get("call_id") or ""
+                        rendered.append(
+                            f"[{line_no}] {role}/{kind} @{ts} id={ev_id} — {preview}"
+                        )
+                    body = "\n".join(rendered)
+
+                header = (
+                    f"# session: {resolved}\n"
+                    f"# total_lines: {total}\n"
+                    f"# {mode_desc}\n"
+                    f"# format: {fmt}\n"
+                    f"# next: get_session(session_path={str(resolved)!r}, start_line={hi}) "
+                    f"{'(end of file)' if hi >= total else ''}\n"
+                )
                 return {
                     "jsonrpc": "2.0",
                     "id": request.get("id"),
