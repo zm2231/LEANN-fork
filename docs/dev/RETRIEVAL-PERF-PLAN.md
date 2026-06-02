@@ -18,8 +18,8 @@ Brief for the recompute-perf codex wave. Consolidates what's already known so th
 
 | Lever | Helps | Impact | Effort | Who owns |
 |---|---|---|---|---|
-| **A. complexity 16–32 (recompute default)** | recompute | 36s→~21s (ours), validated | S (one-liner) | LEANN |
-| **B. `multi_search([q…])` — batch query embeddings** | **no-recompute bulk** + recompute | amortizes ~35ms/call across N queries; big for eval/bulk | S–M | LEANN |
+| **A. complexity 16–32** — speed/recall **knob, NOT a silent default** | recompute | 36s→~21s, but recall@32-vs-64 = **0.87 mean / 0.70 min** over 10 eval-slack queries → real ~13% recall hit, so keep default 64 and expose as opt-in (`--fast` / explicit `complexity=`) | S | LEANN |
+| **B. `multi_search([q…])` — batch query embeddings** ✅ SHIPPED | **no-recompute bulk** + recompute | amortizes the per-call embed across N queries; measured 1.3× on 10 queries (grows with N), results identical to sequential | S | LEANN |
 | **C. Dynamic batching at the embedding server** | recompute throughput | merges concurrent queries' node requests into shared iq batches | M | iq (yours) + LEANN daemon |
 | **D. Hot-node cross-query cache** (codex wave) | recompute | 2–20× (entry/hub nodes reused every query) | L (C++, half-built at `HNSW_zmq.cpp:201`) | LEANN/faiss |
 | **E. iq binary/base64 response** | recompute + build | cuts ~100ms/batch network (350KB JSON → 64KB); iq currently ignores `encoding_format` | S–M | iq (yours) + LEANN decode |

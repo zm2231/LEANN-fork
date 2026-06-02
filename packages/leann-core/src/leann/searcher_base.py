@@ -161,6 +161,46 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
             provider_options=self.embedding_options,
         )
 
+    def compute_query_embeddings(
+        self,
+        queries: list[str],
+        use_server_if_available: bool = True,
+        zmq_port: Optional[int] = None,
+        query_template: Optional[str] = None,
+    ) -> np.ndarray:
+        """Batch variant of compute_query_embedding: embed N queries in ONE call.
+
+        Bulk/multi-query search pays the per-call embedding overhead (~35ms for
+        the HTTP/SDK round trip) once instead of N times. Returns (N, D). Uses
+        the identical code paths as the singular method, so the per-row output
+        matches compute_query_embedding exactly.
+        """
+        templated = [f"{query_template}{q}" if query_template else q for q in queries]
+        if use_server_if_available:
+            try:
+                passages_source_file = self.index_dir / f"{self.index_path.name}.meta.json"
+                zmq_port = self._ensure_server_running(
+                    str(passages_source_file.resolve()),
+                    zmq_port,
+                    enable_warmup=self.enable_warmup,
+                    use_daemon=self.use_daemon,
+                    daemon_ttl_seconds=self.daemon_ttl_seconds,
+                )
+                return self._compute_embedding_via_server(templated, zmq_port)
+            except Exception as e:
+                print(f"⚠️ Embedding server failed: {e}")
+                print("⏭️ Falling back to direct model loading...")
+
+        from .embedding_compute import compute_embeddings
+
+        embedding_mode = self.meta.get("embedding_mode", "sentence-transformers")
+        return compute_embeddings(
+            templated,
+            self.embedding_model,
+            embedding_mode,
+            provider_options=self.embedding_options,
+        )
+
     def _compute_embedding_via_server(self, chunks: list, zmq_port: int) -> np.ndarray:
         """Compute embeddings using the ZMQ embedding server."""
         import msgpack

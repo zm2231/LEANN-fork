@@ -1576,6 +1576,7 @@ class LeannSearcher:
         temporal_axis: Optional[str] = None,
         temporal_overscan: int = 10,
         temporal_now: Optional[datetime] = None,
+        query_embedding: Optional["np.ndarray"] = None,
         **kwargs,
     ) -> list[SearchResult] | tuple[list[SearchResult], dict[str, Any]]:
         """
@@ -1826,12 +1827,15 @@ class LeannSearcher:
             elif "prompt_template" in self.embedding_options:
                 query_template = self.embedding_options["prompt_template"]
 
-            query_embedding = self.backend_impl.compute_query_embedding(
-                query,
-                use_server_if_available=effective_recompute,
-                zmq_port=zmq_port,
-                query_template=query_template,
-            )
+            # multi_search supplies a precomputed (already-templated) embedding to
+            # skip the per-query embed call; otherwise compute it here.
+            if query_embedding is None:
+                query_embedding = self.backend_impl.compute_query_embedding(
+                    query,
+                    use_server_if_available=effective_recompute,
+                    zmq_port=zmq_port,
+                    query_template=query_template,
+                )
             logger.info(f"  Generated embedding shape: {query_embedding.shape}")
             embedding_time = time.time() - start_time
             logger.info(f"  Embedding time: {embedding_time} seconds")
@@ -2061,6 +2065,57 @@ class LeannSearcher:
             ann_candidates_returned=ann_candidates_returned,
             postfilter_survivors=postfilter_survivors,
         )
+
+    def multi_search(
+        self,
+        queries: list[str],
+        top_k: int = 5,
+        provider_options: Optional[dict[str, Any]] = None,
+        **kwargs,
+    ) -> list[list[SearchResult]]:
+        """Search many queries, embedding them all in ONE backend call.
+
+        For bulk/eval workloads this pays the per-query embedding round-trip
+        once instead of N times — the dominant cost for `--no-recompute` bulk
+        search (each query is otherwise one iq call). Each query then runs the
+        normal `search()` path with its precomputed embedding, so every feature
+        (metadata_filters, diversify, context_window, hybrid, ...) behaves
+        identically. Returns one result list per query, in input order.
+        """
+        if not queries:
+            return []
+        # enable_temporal strips time tokens from each query BEFORE embedding, so
+        # we can't pre-embed the literal queries — fall back to per-query search.
+        if kwargs.get("enable_temporal"):
+            return [
+                self.search(q, top_k=top_k, provider_options=provider_options, **kwargs)
+                for q in queries
+            ]
+        # Resolve the query template exactly as search() does so batched
+        # embeddings match the per-query path row-for-row.
+        query_template = None
+        if provider_options and "prompt_template" in provider_options:
+            query_template = provider_options["prompt_template"]
+        elif "query_prompt_template" in self.embedding_options:
+            query_template = self.embedding_options["query_prompt_template"]
+        elif "prompt_template" in self.embedding_options:
+            query_template = self.embedding_options["prompt_template"]
+
+        embeddings = self.backend_impl.compute_query_embeddings(
+            queries,
+            use_server_if_available=self.recompute_embeddings,
+            query_template=query_template,
+        )
+        return [
+            self.search(
+                q,
+                top_k=top_k,
+                query_embedding=embeddings[i : i + 1],
+                provider_options=provider_options,
+                **kwargs,
+            )
+            for i, q in enumerate(queries)
+        ]
 
     def _log_query(
         self,
