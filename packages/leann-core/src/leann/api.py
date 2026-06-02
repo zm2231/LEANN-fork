@@ -1943,10 +1943,19 @@ class LeannSearcher:
                     return dict.fromkeys(raw, 1.0)
                 return {k: (v - lo) / (hi - lo) for k, v in raw.items()}
 
+            # Vector scores must be higher-is-better before min-max. cosine/IP/mips
+            # already are; L2 backends (IVF default, optional HNSW) return raw
+            # distances (lower-is-better), so negate them first — matching the
+            # stored-vector prefilter path in hnsw_backend.py.
+            metric = str(
+                (self.meta_data.get("backend_kwargs") or {}).get("distance_metric", "mips")
+            ).lower()
+            vec_lower_is_better = metric == "l2"
+
             vec_raw: dict[str, float] = {}
             if "labels" in results and "distances" in results:
                 for doc_id, score in zip(results["labels"][0], results["distances"][0]):
-                    vec_raw[doc_id] = score
+                    vec_raw[doc_id] = -score if vec_lower_is_better else score
             bm25_raw = {r.id: r.score for r in bm25_results}
             vec_norm = _minmax(vec_raw)
             bm25_norm = _minmax(bm25_raw)
@@ -1957,7 +1966,8 @@ class LeannSearcher:
                 for doc_id in set(vec_norm) | set(bm25_norm)
             }
 
-            sorted_hybrid = sorted(hybrid_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+            # Stable order: score desc, then doc_id asc (set iteration is nondeterministic).
+            sorted_hybrid = sorted(hybrid_scores.items(), key=lambda kv: (-kv[1], kv[0]))[:top_k]
             results["labels"] = [[doc_id for doc_id, _ in sorted_hybrid]]
             results["distances"] = [[score for _, score in sorted_hybrid]]
 
