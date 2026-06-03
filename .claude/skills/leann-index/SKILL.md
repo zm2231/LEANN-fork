@@ -178,9 +178,13 @@ Default `--doc-chunk-size 256 --doc-chunk-overlap 128` (tokens) is right for pro
 | Tables / structured data | 256 / 0 (no overlap, rows are atomic) |
 | Code | Prefer `--use-ast-chunking` (function/class boundaries). Falls back to `--code-chunk-size 512 / --code-chunk-overlap 50`. |
 
-**Hard ceiling: bge-m3's context is 8192 tokens.** Chunks longer than that are truncated at embed time (the tail is dropped), so don't set `--doc-chunk-size` above ~7000. Truncation counts tokens with bge-m3's **own** tokenizer (not OpenAI's cl100k), so the limit is honored exactly — large chunks no longer 400 the iq server (fixed 2026-06; before, cl100k under-counted by ~1.16× and oversized chunks reached iq and errored). bge-m3 tokenizes ~1.16× denser than cl100k, so a chunk that "looks like" 8000 tokens can be well over the real ceiling.
+**Hard ceiling: bge-m3's context is 8192 tokens.** Chunks longer than that are truncated at embed time (the tail is dropped), so don't set `--doc-chunk-size` above ~7000. Truncation counts tokens with the model's **own** tokenizer (bge-m3 SentencePiece, not OpenAI's cl100k), so the limit is honored exactly. bge-m3 tokenizes ~1.16× denser than cl100k, so a chunk that "looks like" 8000 tokens can be well over the real ceiling.
 
-> If you previously dialed `--doc-chunk-size`/`--code-chunk-size` down (or set any token-limit override) **just to dodge the iq 400**, that workaround is no longer needed — LEANN now truncates correctly against the model's real tokenizer. Pick chunk size for retrieval quality, not to avoid the crash.
+This truncation is **central and universal** (fixed 2026-06): it lives in `compute_embeddings`, so it applies to **every** embedding mode (`openai`, `ollama`, `mlx`) and every build/recompute path — not just some. There's nothing per-build to configure.
+
+> If you previously dialed chunk size down or set any token-limit override **just to dodge the iq 400/413**, that workaround is obsolete — pick chunk size for retrieval quality, not to avoid the crash. Custom scripts that embed *outside* LEANN (POST straight to a shim) should clip first: `from leann import truncate_for_model` → `rows = truncate_for_model(rows, "BAAI/bge-m3")`.
+
+**Don't lower batch size to avoid OOM.** Embedding-server OOMs (Metal `metal::malloc`) come from `batch_size × padded-max-tokens`, not from any single chunk. The iq shim now enforces a padded-token budget and **splits incoming batches internally**, so `LEANN_EMBED_BATCH_SIZE` is just a throughput/load knob — leave it at the default; you don't need to shrink it to keep the shim alive.
 
 ### AST chunking — when
 
