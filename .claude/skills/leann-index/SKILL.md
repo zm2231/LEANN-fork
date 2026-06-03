@@ -178,6 +178,10 @@ Default `--doc-chunk-size 256 --doc-chunk-overlap 128` (tokens) is right for pro
 | Tables / structured data | 256 / 0 (no overlap, rows are atomic) |
 | Code | Prefer `--use-ast-chunking` (function/class boundaries). Falls back to `--code-chunk-size 512 / --code-chunk-overlap 50`. |
 
+**Hard ceiling: bge-m3's context is 8192 tokens.** Chunks longer than that are truncated at embed time (the tail is dropped), so don't set `--doc-chunk-size` above ~7000. Truncation counts tokens with bge-m3's **own** tokenizer (not OpenAI's cl100k), so the limit is honored exactly — large chunks no longer 400 the iq server (fixed 2026-06; before, cl100k under-counted by ~1.16× and oversized chunks reached iq and errored). bge-m3 tokenizes ~1.16× denser than cl100k, so a chunk that "looks like" 8000 tokens can be well over the real ceiling.
+
+> If you previously dialed `--doc-chunk-size`/`--code-chunk-size` down (or set any token-limit override) **just to dodge the iq 400**, that workaround is no longer needed — LEANN now truncates correctly against the model's real tokenizer. Pick chunk size for retrieval quality, not to avoid the crash.
+
 ### AST chunking — when
 
 - ✅ Python, Java, C#, TS/TSX/JS (astchunk-supported languages)
