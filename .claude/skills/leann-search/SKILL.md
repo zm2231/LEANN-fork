@@ -28,6 +28,7 @@ All opt-in, all composable in a single `search()` call:
 - **Facets** — `s.facets([...])` returns corpus value counts for filter authoring.
 - **Explain** — `explain_filters=True` returns `(results, diagnostics)` with selectivity + routing.
 - **Query log** — `LEANN_QUERY_LOG=<path>` appends a JSONL record per search for replay.
+- **Bulk search** — `s.multi_search([q1, q2, …], top_k=…)` embeds all queries in ONE backend call, then runs each through the normal `search()` path with its precomputed embedding. For `--no-recompute` bulk/eval workloads this pays the per-query embedding round-trip once instead of N times (~4–5× warm on 8–10 queries; batched embeddings are numerically identical to single-query). Accepts every `search()` kwarg. Transparently falls back to per-query `search()` when batching can't help or wouldn't match — recompute mode, `enable_temporal=True` (strips time tokens before embedding), `use_grep`, or pure-BM25 (`vector_weight=0.0`) — so it's always safe to call.
 
 ## `leann search` — fast retrieval
 
