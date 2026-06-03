@@ -296,6 +296,31 @@ def truncate_to_token_limit(
     return truncated_texts
 
 
+def truncate_for_model(
+    texts: list[str],
+    model_name: str,
+    base_url: Optional[str] = None,
+) -> list[str]:
+    """Clip texts to a model's real token limit — the client-side embedding guard.
+
+    One call that resolves the model's context window (registry + dynamic
+    discovery, via get_model_token_limit) and truncates each text with the
+    model's OWN tokenizer (truncate_to_token_limit). Any embedding client should
+    call this before sending text to an embedding server — including non-LEANN
+    scripts that POST to a self-hosted shim directly — so no request can exceed
+    the model's context window. Over-limit input otherwise 413s on a remote shim,
+    or on a local/MLX model OOMs by padding the whole batch up to the oversized
+    row (metal::malloc).
+
+    Example (client-side, no LEANN index involved):
+        from leann import truncate_for_model
+        safe = truncate_for_model(rows, "BAAI/bge-m3")   # clips to 8192 tokens
+        # ... POST `safe` to the embedding endpoint ...
+    """
+    token_limit = get_model_token_limit(model_name, base_url=base_url)
+    return truncate_to_token_limit(texts, token_limit, model_name=model_name)
+
+
 def _query_ollama_context_limit(model_name: str, base_url: str) -> Optional[int]:
     """
     Query Ollama /api/show for model context limit.
@@ -899,10 +924,8 @@ def compute_embeddings_openai(
         logger.warning(f"Applying prompt template: '{prompt_template}'")
         texts = [f"{prompt_template}{text}" for text in texts]
 
-    # Query token limit and apply truncation
-    token_limit = get_model_token_limit(model_name, base_url=effective_base_url)
-    logger.info(f"Using token limit: {token_limit} for model '{model_name}'")
-    texts = truncate_to_token_limit(texts, token_limit, model_name=model_name)
+    # Clip to the model's real token limit before sending (client-side guard).
+    texts = truncate_for_model(texts, model_name, base_url=effective_base_url)
 
     # OpenAI has limits on batch size and input length
     max_batch_size = 800  # Conservative batch size because the token limit is 300K
@@ -1014,6 +1037,12 @@ def compute_embeddings_mlx(chunks: list[str], model_name: str, batch_size: int =
         model, tokenizer = load(model_name)
         _model_cache[cache_key] = (model, tokenizer)
         logger.info(f"MLX model cached: {cache_key}")
+
+    # Clip to the model's real token limit BEFORE batching. MLX pads every row in
+    # a batch up to the longest row (see max_length below), so one oversized chunk
+    # would blow up Metal allocation (metal::malloc OOM). Truncation bounds the
+    # per-row worst case; batch-size still bounds the row count.
+    chunks = truncate_for_model(chunks, model_name)
 
     # Process chunks in batches with progress bar
     all_embeddings = []
@@ -1229,13 +1258,8 @@ def compute_embeddings_ollama(
         logger.warning(f"Applying prompt template: '{prompt_template}'")
         texts = [f"{prompt_template}{text}" for text in texts]
 
-    # Get model token limit and apply truncation before batching
-    token_limit = get_model_token_limit(model_name, base_url=resolved_host)
-    logger.info(f"Model '{model_name}' token limit: {token_limit}")
-
-    # Apply truncation to all texts before batch processing
-    # Function logs truncation details internally
-    texts = truncate_to_token_limit(texts, token_limit, model_name=model_name)
+    # Clip to the model's real token limit before batching (client-side guard).
+    texts = truncate_for_model(texts, model_name, base_url=resolved_host)
 
     def get_batch_embeddings(batch_texts):
         """Get embeddings for a batch of texts using /api/embed endpoint."""

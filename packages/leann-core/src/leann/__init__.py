@@ -25,6 +25,7 @@ elif system == "Linux":
     os.environ.setdefault("OMP_WAIT_POLICY", "PASSIVE")
 
 from .api import LeannBuilder, LeannChat, LeannSearcher
+from .embedding_compute import truncate_for_model
 from .react_agent import ReActAgent, create_react_agent
 from .registry import BACKEND_REGISTRY, autodiscover_backends
 
@@ -37,4 +38,5 @@ __all__ = [
     "LeannSearcher",
     "ReActAgent",
     "create_react_agent",
+    "truncate_for_model",
 ]
