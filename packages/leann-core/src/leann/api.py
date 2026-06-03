@@ -845,6 +845,20 @@ class LeannBuilder:
         with open(leann_meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
 
+        self._record_in_manifest(leann_meta_path)
+
+    def _record_in_manifest(self, leann_meta_path: Path) -> None:
+        """Upsert this index into the global manifest that powers fast ``leann list``."""
+        from .index_manifest import record_index
+
+        record_index(
+            leann_meta_path,
+            backend=self.backend_name,
+            embedding_model=self.embedding_model,
+            embedding_mode=self.embedding_mode,
+            dimensions=self.dimensions,
+        )
+
     def _build_bm25_fts5(self, index_dir: Path, index_name: str) -> None:
         """Build a SQLite FTS5 BM25 index alongside the vector index.
 
@@ -984,6 +998,8 @@ class LeannBuilder:
 
         with open(leann_meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
+
+        self._record_in_manifest(leann_meta_path)
 
         logger.info(f"Index built successfully from precomputed embeddings: {index_path}")
 
@@ -1376,7 +1392,10 @@ class LeannSearcher:
         raw_index_path = Path(index_path)
         if not raw_index_path.is_absolute() and len(raw_index_path.parts) == 1:
             local_index = Path.cwd() / ".leann" / "indexes" / index_path / "documents.leann"
-            if local_index.with_suffix(".leann.meta.json").exists() or Path(f"{local_index}.meta.json").exists():
+            if (
+                local_index.with_suffix(".leann.meta.json").exists()
+                or Path(f"{local_index}.meta.json").exists()
+            ):
                 index_path = str(local_index)
 
         # Fix path resolution for Colab and other environments
@@ -1424,9 +1443,7 @@ class LeannSearcher:
         # and-score path on no-recompute indexes. Explicit True/False wins.
         if recompute_embeddings is None:
             meta_kwargs = self.meta_data.get("backend_kwargs", {}) or {}
-            self.recompute_embeddings: bool = bool(
-                meta_kwargs.get("is_recompute", True)
-            )
+            self.recompute_embeddings: bool = bool(meta_kwargs.get("is_recompute", True))
         else:
             self.recompute_embeddings: bool = bool(recompute_embeddings)
 
@@ -1730,9 +1747,7 @@ class LeannSearcher:
                     else temporal_strict
                 )
                 for result in search_results:
-                    used_axis = resolve_temporal_axis(
-                        result.metadata, temporal_axis_routed, strict
-                    )
+                    used_axis = resolve_temporal_axis(result.metadata, temporal_axis_routed, strict)
                     if used_axis is None:
                         continue
                     if used_axis != temporal_axis_routed:
@@ -1857,7 +1872,9 @@ class LeannSearcher:
                     prefilter == "auto" and selectivity < prefilter_threshold
                 ):
                     logger.info("  Using brute-force scored prefilter path")
-                    filtered_matches = self.passage_manager.matching_filtered_subset(metadata_filters)
+                    filtered_matches = self.passage_manager.matching_filtered_subset(
+                        metadata_filters
+                    )
                     backend_supports_stored = (
                         not effective_recompute
                         and hasattr(self.backend_impl, "score_passage_ids")
@@ -1934,6 +1951,7 @@ class LeannSearcher:
             logger.info(f"  🌟 Hybrid search enabled with vector_weight={vector_weight}")
             bm25_weight = 1.0 - vector_weight
             bm25_results = self._bm25_search(query, top_k)
+
             # Min-max normalize each source to [0,1] BEFORE fusing. Vector scores
             # (cosine/IP, ~[0,1]) and FTS5 bm25() scores live on different,
             # incomparable scales (bm25() is unbounded, often 2-15), so a raw

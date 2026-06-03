@@ -807,7 +807,12 @@ Examples:
         )
 
         # List command
-        subparsers.add_parser("list", help="List all indexes")
+        list_parser = subparsers.add_parser("list", help="List all indexes")
+        list_parser.add_argument(
+            "--refresh",
+            action="store_true",
+            help="Rebuild the index manifest from a full disk scan (slower; self-heals stale entries)",
+        )
 
         # Remove command
         remove_parser = subparsers.add_parser("remove", help="Remove an index")
@@ -900,7 +905,19 @@ Examples:
             # If anything goes wrong, assume it's not a submodule
             return False
 
-    def list_indexes(self):
+    def list_indexes(self, refresh: bool = False):
+        # Fast path: render from the global index manifest (~/.leann/indexes.json),
+        # which index build/remove keeps current. Avoids os.walk-ing every
+        # registered project tree on each list. `--refresh` (or an empty manifest)
+        # falls through to a full disk scan that rebuilds the manifest.
+        from . import index_manifest as _manifest
+
+        if not refresh:
+            entries = list(_manifest.iter_indexes(verify=True))
+            if entries:
+                self._render_manifest_list(entries)
+                return
+
         # Get all project directories with .leann
         global_registry = Path.home() / ".leann" / "projects.json"
         all_projects = []
@@ -957,10 +974,11 @@ Examples:
         # Check CLI-format (.leann/indexes) and app-only projects (registered in projects.json).
         _current_path_str = str(current_path.resolve())
         _current_is_project = (
-            (current_path / ".leann" / "indexes").exists()
-            or _current_path_str in all_projects
+            current_path / ".leann" / "indexes"
+        ).exists() or _current_path_str in all_projects
+        current_indexes = (
+            _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
         )
-        current_indexes = _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
         if current_indexes:
             for idx in current_indexes:
                 total_indexes += 1
@@ -1000,7 +1018,8 @@ Examples:
         else:
             # Count only projects that have at least one discoverable index (use cache)
             projects_count = sum(
-                1 for p in valid_projects
+                1
+                for p in valid_projects
                 if len(_get_indexes(p, exclude=other_projects if p == current_path else None)) > 0
             )
             print(f"📊 Total: {total_indexes} indexes across {projects_count} projects")
@@ -1018,6 +1037,93 @@ Examples:
             elif total_indexes == 0:
                 print("\n💡 Create your first index:")
                 print("   leann build my-docs --docs ./documents")
+
+        # Repopulate the manifest so the next `leann list` takes the fast path.
+        # Non-destructive merge: keep manifest entries whose meta file still
+        # exists (the disk scan only covers projects with .leann/indexes, so it
+        # can miss build-recorded app indexes), then overlay the freshly scanned
+        # entries for authoritative size/grouping. iter_indexes already pruned
+        # entries whose files are gone.
+        merged: dict[str, dict] = {}
+        for entry in _manifest.iter_indexes(verify=True):
+            merged[entry["meta_path"]] = entry
+        for idx_list in _index_cache.values():
+            for idx in idx_list:
+                mp = idx.get("meta_path")
+                if not mp:
+                    continue
+                entry = _manifest.make_entry(
+                    Path(mp), name=idx.get("name"), project=idx.get("project")
+                )
+                merged[entry["meta_path"]] = entry
+        _manifest.replace_all(list(merged.values()))
+
+    def _render_manifest_list(self, entries: list[dict]):
+        """Render `leann list` from manifest entries (the fast path).
+
+        entries carry: name, type ('cli'|'app'), project, size_mb, meta_path.
+        Grouping mirrors the disk-scan renderer: current project first, then
+        other projects sorted by path.
+        """
+        current_path = Path.cwd()
+        try:
+            current_str = str(current_path.resolve())
+        except Exception:
+            current_str = str(current_path)
+
+        by_project: dict[str, list[dict]] = {}
+        for e in entries:
+            by_project.setdefault(e.get("project", ""), []).append(e)
+        for group in by_project.values():
+            group.sort(key=lambda e: e.get("name", ""))
+
+        def _icon(e):
+            return "📁" if e.get("type") == "cli" else "📄"
+
+        print("📚 LEANN Indexes")
+        print("=" * 50)
+
+        # Current project
+        print("\n🏠 Current Project")
+        print(f"   {current_path}")
+        print("   " + "─" * 45)
+        current_indexes = by_project.pop(current_str, [])
+        if current_indexes:
+            for n, idx in enumerate(current_indexes, 1):
+                print(f"   {n}. {_icon(idx)} {idx['name']} ✅")
+                if idx.get("size_mb", 0) > 0:
+                    print(f"      📦 Size: {idx['size_mb']:.1f} MB")
+        else:
+            print("   📭 No indexes in current project")
+
+        # Other projects
+        other = {p: g for p, g in by_project.items() if g}
+        if other:
+            print("\n\n🗂️  Other Projects")
+            print("   " + "─" * 45)
+            for project_str in sorted(other):
+                group = other[project_str]
+                print(f"\n   📂 {Path(project_str).name}")
+                print(f"      {project_str}")
+                for idx in group:
+                    print(f"      • {_icon(idx)} {idx['name']} ✅")
+                    if idx.get("size_mb", 0) > 0:
+                        print(f"        📦 {idx['size_mb']:.1f} MB")
+
+        # Summary
+        total = len(current_indexes) + sum(len(g) for g in other.values())
+        projects_count = (1 if current_indexes else 0) + len(other)
+        print("\n" + "=" * 50)
+        if total == 0:
+            print("💡 Get started:")
+            print("   leann build my-docs --docs ./documents")
+        else:
+            print(f"📊 Total: {total} indexes across {projects_count} projects")
+            if current_indexes:
+                example_name = current_indexes[0]["name"]
+                print("\n💫 Quick start (current project):")
+                print(f'   leann search {example_name} "your query"')
+                print(f"   leann ask {example_name} --interactive")
 
     def _discover_indexes_in_project(
         self, project_path: Path, exclude_dirs: Optional[list[Path]] = None
@@ -1060,19 +1166,34 @@ Examples:
                             "status": status,
                             "size_mb": size_mb,
                             "path": index_dir,
+                            "meta_path": str(meta_file),
+                            "project": str(project_path),
+                            "file_base": "documents.leann",
                         }
                     )
 
         # 2. Apps format: *.leann.meta.json files anywhere in the project
         cli_indexes_dir = project_path / ".leann" / "indexes"
         _SKIP_DIRS = {
-            "node_modules", ".git", "__pycache__", ".venv", "venv",
-            ".next", "dist", "build", ".tox", ".eggs", "target",
-            ".worktrees", ".cache", ".leann",
+            "node_modules",
+            ".git",
+            "__pycache__",
+            ".venv",
+            "venv",
+            ".next",
+            "dist",
+            "build",
+            ".tox",
+            ".eggs",
+            "target",
+            ".worktrees",
+            ".cache",
+            ".leann",
         }
 
         def _walk_meta_files(root: Path):
             import os as _os
+
             for dirpath, dirnames, filenames in _os.walk(root):
                 dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
                 for fname in filenames:
@@ -1122,6 +1243,9 @@ Examples:
                         "status": status,
                         "size_mb": size_mb,
                         "path": meta_file,
+                        "meta_path": str(meta_file),
+                        "project": str(project_path),
+                        "file_base": file_base,
                     }
                 )
 
@@ -1403,6 +1527,8 @@ Examples:
         app_file_base: Optional[str] = None,
     ):
         """Delete a CLI index directory or APP index files safely."""
+        from .index_manifest import forget_dir, forget_index
+
         try:
             if is_app:
                 removed = 0
@@ -1424,6 +1550,8 @@ Examples:
                         errors += 1
 
                 if removed > 0 and errors == 0:
+                    if meta_file:
+                        forget_index(meta_file)
                     if project_path:
                         print(
                             f"✅ App index '{index_display_name}' removed from {project_path.name}"
@@ -1445,6 +1573,7 @@ Examples:
                 import shutil
 
                 shutil.rmtree(index_dir)
+                forget_dir(index_dir)
 
                 if project_path:
                     print(f"✅ Index '{index_display_name}' removed from {project_path.name}")
@@ -3342,7 +3471,7 @@ Examples:
         suppress = not getattr(args, "verbose", False)
 
         if args.command == "list":
-            self.list_indexes()
+            self.list_indexes(refresh=getattr(args, "refresh", False))
         elif args.command == "remove":
             self.remove_index(args.index_name, args.force)
         elif args.command == "build":
