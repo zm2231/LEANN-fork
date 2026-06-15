@@ -54,6 +54,9 @@ except json.JSONDecodeError:
     logger.warning("Failed to parse LEANN_EMBEDDING_OPTIONS; ignoring provider options")
     PROVIDER_OPTIONS = {}
 
+_SERVER_INFO_REQUEST = "__LEANN_SERVER_INFO__"
+_SERVER_PROTOCOL = "leann-embedding-server"
+
 
 def create_hnsw_embedding_server(
     passages_file: Optional[str] = None,
@@ -128,6 +131,17 @@ def create_hnsw_embedding_server(
     except Exception:
         embedding_dim = 0
     logger.info(f"Loaded PassageManager with {len(passages)} passages from metadata")
+
+    server_info = {
+        "protocol": _SERVER_PROTOCOL,
+        "backend_module_name": "leann_backend_hnsw.hnsw_embedding_server",
+        "pid": os.getpid(),
+        "port": zmq_port,
+        "model_name": model_name,
+        "passages_file": str(Path(passages_file).resolve()),
+        "embedding_mode": embedding_mode,
+        "distance_metric": distance_metric or "",
+    }
 
     # Attempt to load ID map (maps FAISS integer labels -> passage IDs)
     id_map: list[str] = []
@@ -371,6 +385,12 @@ def create_hnsw_embedding_server(
                 try:
                     # Model query
                     if (
+                        isinstance(request, list)
+                        and len(request) == 1
+                        and request[0] == _SERVER_INFO_REQUEST
+                    ):
+                        rep_socket.send(msgpack.packb(server_info, use_bin_type=True))
+                    elif (
                         isinstance(request, list)
                         and len(request) == 1
                         and request[0] == "__QUERY_MODEL__"
