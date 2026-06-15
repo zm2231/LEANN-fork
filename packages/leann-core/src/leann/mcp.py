@@ -1,11 +1,208 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
 import json
+import os
 import subprocess
 import sys
+from typing import Any
 
 _base_dir: str | None = None
+
+
+@contextlib.contextmanager
+def _mcp_cwd():
+    if not _base_dir:
+        yield
+        return
+    old = os.getcwd()
+    os.chdir(_base_dir)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+@contextlib.contextmanager
+def _suppress_stdout_fd():
+    """Suppress Python and native stdout while preserving JSON-RPC stdio framing."""
+    sys.stdout.flush()
+    saved_fd = None
+    devnull_file = None
+    try:
+        saved_fd = os.dup(1)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, 1)
+        os.close(devnull)
+        devnull_file = open(os.devnull, "w")
+        with contextlib.redirect_stdout(devnull_file):
+            yield
+    finally:
+        sys.stdout.flush()
+        if devnull_file is not None:
+            devnull_file.close()
+        if saved_fd is not None:
+            os.dup2(saved_fd, 1)
+            os.close(saved_fd)
+
+
+def _parse_json_object(value: Any, label: str) -> tuple[dict[str, Any] | None, str | None]:
+    if value in (None, ""):
+        return None, None
+    if isinstance(value, dict):
+        return value, None
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError as e:
+            return None, f"Error: {label} is not valid JSON: {e}"
+        if isinstance(parsed, dict):
+            return parsed, None
+    return None, f"Error: {label} must be a JSON object"
+
+
+def _result_to_dict(result, *, query: str | None = None, rank: int | None = None) -> dict[str, Any]:
+    out = {
+        "id": result.id,
+        "score": float(result.score),
+        "text": result.text,
+        "metadata": result.metadata,
+    }
+    if query is not None:
+        out["query"] = query
+    if rank is not None:
+        out["rank"] = rank
+    siblings = getattr(result, "siblings", None)
+    if siblings:
+        out["siblings"] = [_result_to_dict(s) for s in siblings]
+    return out
+
+
+def _rrf_fuse(
+    result_lists: list[list],
+    queries: list[str],
+    *,
+    limit: int,
+    rrf_k: int = 60,
+) -> list[dict[str, Any]]:
+    fused: dict[str, dict[str, Any]] = {}
+    order = 0
+    for query, results in zip(queries, result_lists):
+        for rank, result in enumerate(results, 1):
+            key = str(result.id)
+            entry = fused.get(key)
+            if entry is None:
+                entry = {
+                    "result": result,
+                    "rrf_score": 0.0,
+                    "best_rank": rank,
+                    "matched_queries": [],
+                    "_order": order,
+                }
+                fused[key] = entry
+                order += 1
+            entry["rrf_score"] += 1.0 / (rrf_k + rank)
+            entry["best_rank"] = min(entry["best_rank"], rank)
+            if query not in entry["matched_queries"]:
+                entry["matched_queries"].append(query)
+
+    ranked = sorted(
+        fused.values(),
+        key=lambda e: (-e["rrf_score"], e["best_rank"], e["_order"]),
+    )[:limit]
+    output = []
+    for entry in ranked:
+        row = _result_to_dict(entry["result"])
+        row["rrf_score"] = entry["rrf_score"]
+        row["best_rank"] = entry["best_rank"]
+        row["matched_queries"] = entry["matched_queries"]
+        output.append(row)
+    return output
+
+
+def _resolve_index_path(index_name: str) -> str:
+    from .cli import LeannCLI
+
+    cli = LeannCLI()
+    resolved = cli._resolve_index_path(index_name, non_interactive=True, purpose="search", quiet=True)
+    if not resolved:
+        raise ValueError(f"Index not found: {index_name}")
+    return resolved
+
+
+def _direct_multi_search(args: dict[str, Any]) -> dict[str, Any]:
+    from .api import LeannSearcher
+
+    if not args.get("index_name") or not args.get("query"):
+        raise ValueError("index_name and query are required")
+
+    query = str(args["query"])
+    extra_queries = args.get("extra_queries") or args.get("extraQueries") or []
+    if isinstance(extra_queries, str):
+        extra_queries = [extra_queries]
+    if not isinstance(extra_queries, list):
+        raise ValueError("extra_queries must be a list of strings")
+    queries = [query] + [str(q) for q in extra_queries if str(q).strip()]
+
+    search_mode = args.get("search_mode") or args.get("searchMode") or "prose"
+    if search_mode not in {"prose", "code", "exact", "filtered"}:
+        raise ValueError("search_mode must be one of: prose, code, exact, filtered")
+
+    default_top_k = 12 if search_mode in {"prose", "filtered"} else 5
+    default_fetch = 50 if search_mode == "filtered" else 30 if len(queries) > 1 else default_top_k
+    top_k = int(args.get("top_k", args.get("topK", default_top_k)))
+    fetch = int(args.get("fetch", max(top_k, default_fetch)))
+    limit = int(args.get("limit", top_k))
+    complexity = int(args.get("complexity", 64))
+
+    default_weight = {
+        "prose": 0.3,
+        "code": 1.0,
+        "exact": 0.0,
+        "filtered": 0.3,
+    }[search_mode]
+    vector_weight = float(args.get("vector_weight", args.get("vectorWeight", default_weight)))
+
+    metadata_filters, err = _parse_json_object(
+        args.get("metadata_filters", args.get("metadataFilters")), "metadata_filters"
+    )
+    if err:
+        raise ValueError(err)
+
+    search_kwargs: dict[str, Any] = {
+        "complexity": complexity,
+        "metadata_filters": metadata_filters,
+        "vector_weight": vector_weight,
+        "prefilter": args.get("prefilter", "auto"),
+    }
+    for src, dest, cast in (
+        ("diversify_by", "diversify_by", str),
+        ("diversifyBy", "diversify_by", str),
+        ("max_per_group", "max_per_group", int),
+        ("maxPerGroup", "max_per_group", int),
+        ("context_window", "context_window", int),
+        ("contextWindow", "context_window", int),
+    ):
+        if src in args:
+            search_kwargs[dest] = cast(args[src])
+
+    with _mcp_cwd():
+        index_path = _resolve_index_path(str(args["index_name"]))
+    with _suppress_stdout_fd():
+        with LeannSearcher(index_path=index_path, enable_warmup=False) as searcher:
+            result_lists = searcher.multi_search(queries, top_k=fetch, **search_kwargs)
+    plain_lists = [item[0] if isinstance(item, tuple) else item for item in result_lists]
+    fused = _rrf_fuse(plain_lists, queries, limit=limit)
+    return {
+        "index_name": args["index_name"],
+        "search_mode": search_mode,
+        "queries": queries,
+        "vector_weight": vector_weight,
+        "fetch": fetch,
+        "limit": limit,
+        "results": fused,
+    }
 
 
 def _leann_cmd() -> list[str]:
@@ -77,6 +274,88 @@ def handle_request(request):
                                     "type": "boolean",
                                     "default": False,
                                     "description": "Include file paths and metadata in search results. Useful for understanding which files contain the results.",
+                                },
+                                "metadata_filters": {
+                                    "type": "object",
+                                    "description": "Optional LEANN metadata filters, e.g. {'source_type': {'==': 'slack'}}.",
+                                },
+                            },
+                            "required": ["index_name", "query"],
+                        },
+                    },
+                    {
+                        "name": "leann_multi_search",
+                        "description": """🔎 Batched multi-query LEANN search with RRF fusion.
+
+Use this for prose/chat/meeting recall: send the user's query plus 4-6 paraphrases in
+`extra_queries`. LEANN embeds the queries in one batch when possible, runs each search,
+then fuses results with reciprocal-rank fusion. Use `search_mode='prose'` for meetings
+and notes, `code` for codebases, `exact` for exact keyword lookup, and `filtered` when
+metadata filters should get a larger candidate pool.""",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "index_name": {
+                                    "type": "string",
+                                    "description": "Name of the LEANN index to search.",
+                                },
+                                "query": {
+                                    "type": "string",
+                                    "description": "Primary user query, as written.",
+                                },
+                                "extra_queries": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Optional paraphrases/angles for broad recall. Skip for exact names, dates, or quoted phrases.",
+                                },
+                                "search_mode": {
+                                    "type": "string",
+                                    "enum": ["prose", "code", "exact", "filtered"],
+                                    "default": "prose",
+                                    "description": "Default tuning preset. prose uses vector_weight 0.3; code uses 1.0; exact uses 0.0.",
+                                },
+                                "vector_weight": {
+                                    "type": "number",
+                                    "minimum": 0.0,
+                                    "maximum": 1.0,
+                                    "description": "Hybrid weight: 1.0 pure vector, 0.0 pure BM25. Overrides search_mode default.",
+                                },
+                                "top_k": {
+                                    "type": "integer",
+                                    "default": 12,
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                    "description": "Number of fused results to return unless limit is set.",
+                                },
+                                "fetch": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 500,
+                                    "description": "Per-query candidate pool before RRF fusion. Raise when filtering by speaker/date.",
+                                },
+                                "limit": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 100,
+                                    "description": "Final fused result count. Defaults to top_k.",
+                                },
+                                "metadata_filters": {
+                                    "type": "object",
+                                    "description": "Optional LEANN metadata filters.",
+                                },
+                                "prefilter": {
+                                    "type": "string",
+                                    "enum": ["auto", "always", "never"],
+                                    "default": "auto",
+                                },
+                                "diversify_by": {"type": "string"},
+                                "max_per_group": {"type": "integer", "minimum": 1, "maximum": 20},
+                                "context_window": {"type": "integer", "minimum": 0, "maximum": 10},
+                                "complexity": {
+                                    "type": "integer",
+                                    "default": 64,
+                                    "minimum": 16,
+                                    "maximum": 256,
                                 },
                             },
                             "required": ["index_name", "query"],
@@ -231,12 +510,36 @@ Examples:
                 ]
                 if args.get("show_metadata", False):
                     cmd.append("--show-metadata")
+                filters, err = _parse_json_object(args.get("metadata_filters"), "metadata_filters")
+                if err:
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": request.get("id"),
+                        "result": {"content": [{"type": "text", "text": err}]},
+                    }
+                if filters:
+                    cmd.append(f"--metadata-filters={json.dumps(filters)}")
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
                     cwd=_base_dir,
                 )
+
+            elif tool_name == "leann_multi_search":
+                payload = _direct_multi_search(args)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(payload, ensure_ascii=False, indent=2),
+                            }
+                        ]
+                    },
+                }
 
             elif tool_name == "leann_list":
                 result = subprocess.run(
@@ -436,10 +739,24 @@ Examples:
                     "--show-metadata",
                 ]
                 if filters:
-                    cmd.append(f"--metadata-filter={json.dumps(filters)}")
+                    cmd.append(f"--metadata-filters={json.dumps(filters)}")
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, cwd=_base_dir
                 )
+
+            else:
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Error: unknown tool '{tool_name}'",
+                            }
+                        ]
+                    },
+                }
 
             return {
                 "jsonrpc": "2.0",
