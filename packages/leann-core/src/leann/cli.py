@@ -813,7 +813,12 @@ Examples:
         )
 
         # List command
-        subparsers.add_parser("list", help="List all indexes")
+        list_parser = subparsers.add_parser("list", help="List all indexes")
+        list_parser.add_argument(
+            "--refresh",
+            action="store_true",
+            help="Rebuild the index manifest from a full disk scan (slower; finds legacy app indexes)",
+        )
 
         # Remove command
         remove_parser = subparsers.add_parser("remove", help="Remove an index")
@@ -906,7 +911,18 @@ Examples:
             # If anything goes wrong, assume it's not a submodule
             return False
 
-    def list_indexes(self):
+    def list_indexes(self, refresh: bool = False):
+        # Fast path: build/remove maintains ~/.leann/indexes.json, so the common
+        # list path only verifies known meta files instead of walking every
+        # registered project tree.
+        from . import index_manifest as _manifest
+
+        if not refresh:
+            entries = list(_manifest.iter_indexes(verify=True))
+            if entries:
+                self._render_manifest_list(entries)
+                return
+
         # Get all project directories with .leann
         global_registry = Path.home() / ".leann" / "projects.json"
         all_projects = []
@@ -920,23 +936,50 @@ Examples:
             except Exception:
                 pass
 
-        # Filter to only existing directories with .leann
+        current_path = Path.cwd()
+        try:
+            current_resolved = current_path.resolve()
+        except Exception:
+            current_resolved = current_path
+        all_project_resolved = set()
+        for project_dir in all_projects:
+            try:
+                all_project_resolved.add(str(Path(project_dir).resolve()))
+            except Exception:
+                all_project_resolved.add(str(project_dir))
+
+        # Filter registered projects. Normal list only needs cheap CLI-layout
+        # discovery; --refresh includes registered app-only projects too.
         valid_projects = []
+        valid_project_resolved = set()
         for project_dir in all_projects:
             project_path = Path(project_dir)
-            if project_path.exists() and (project_path / ".leann" / "indexes").exists():
+            has_cli_indexes = (project_path / ".leann" / "indexes").exists()
+            if project_path.exists() and (has_cli_indexes or refresh):
                 valid_projects.append(project_path)
+                try:
+                    valid_project_resolved.add(str(project_path.resolve()))
+                except Exception:
+                    valid_project_resolved.add(str(project_path))
 
         # Add current project if it has .leann but not in registry
-        current_path = Path.cwd()
-        if (current_path / ".leann" / "indexes").exists() and current_path not in valid_projects:
+        current_has_cli_indexes = (current_path / ".leann" / "indexes").exists()
+        if (
+            (current_has_cli_indexes or refresh)
+            and str(current_resolved) not in valid_project_resolved
+        ):
             valid_projects.append(current_path)
+            valid_project_resolved.add(str(current_resolved))
 
         # Separate current and other projects
         other_projects = []
 
         for project_path in valid_projects:
-            if project_path != current_path:
+            try:
+                project_resolved = project_path.resolve()
+            except Exception:
+                project_resolved = project_path
+            if project_resolved != current_resolved:
                 other_projects.append(project_path)
 
         print("📚 LEANN Indexes")
@@ -951,7 +994,11 @@ Examples:
             # Canonicalize so /a/b and /a/x/../b produce the same cache key
             key = (path.resolve(), tuple(p.resolve() for p in (exclude or [])))
             if key not in _index_cache:
-                _index_cache[key] = self._discover_indexes_in_project(path, exclude_dirs=exclude)
+                _index_cache[key] = self._discover_indexes_in_project(
+                    path,
+                    exclude_dirs=exclude,
+                    include_app_indexes=refresh,
+                )
             return _index_cache[key]
 
         # Show current project first (most important)
@@ -959,12 +1006,13 @@ Examples:
         print(f"   {current_path}")
         print("   " + "─" * 45)
 
-        # Only scan current dir if it's a registered leann project — avoids rglob on broad paths like ~.
-        # Check CLI-format (.leann/indexes) and app-only projects (registered in projects.json).
-        _current_path_str = str(current_path.resolve())
+        # Only scan current dir if it's a registered leann project. Without
+        # --refresh this stays bounded to .leann/indexes and never recursively
+        # scans broad dirs like ~.
+        _current_path_str = str(current_resolved)
         _current_is_project = (
             (current_path / ".leann" / "indexes").exists()
-            or _current_path_str in all_projects
+            or (refresh and _current_path_str in all_project_resolved)
         )
         current_indexes = _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
         if current_indexes:
@@ -1025,8 +1073,89 @@ Examples:
                 print("\n💡 Create your first index:")
                 print("   leann build my-docs --docs ./documents")
 
+        # Populate or refresh the manifest so the next `leann list` takes the
+        # steady-state fast path. Non-refresh list seeds from cheap CLI-layout
+        # indexes only; --refresh additionally captures legacy app-format files.
+        merged: dict[str, dict] = {}
+        for entry in _manifest.iter_indexes(verify=True):
+            merged[entry["meta_path"]] = entry
+        for idx_list in _index_cache.values():
+            for idx in idx_list:
+                mp = idx.get("meta_path")
+                if not mp:
+                    continue
+                entry = _manifest.make_entry(
+                    Path(mp),
+                    name=idx.get("name"),
+                    project=idx.get("project"),
+                )
+                merged[entry["meta_path"]] = entry
+        _manifest.replace_all(list(merged.values()))
+
+    def _render_manifest_list(self, entries: list[dict]):
+        """Render `leann list` from manifest entries without disk discovery."""
+        current_path = Path.cwd()
+        try:
+            current_str = str(current_path.resolve())
+        except Exception:
+            current_str = str(current_path)
+
+        by_project: dict[str, list[dict]] = {}
+        for entry in entries:
+            by_project.setdefault(entry.get("project", ""), []).append(entry)
+        for group in by_project.values():
+            group.sort(key=lambda e: e.get("name", ""))
+
+        def _icon(entry):
+            return "📁" if entry.get("type") == "cli" else "📄"
+
+        print("📚 LEANN Indexes")
+        print("=" * 50)
+
+        print("\n🏠 Current Project")
+        print(f"   {current_path}")
+        print("   " + "─" * 45)
+        current_indexes = by_project.pop(current_str, [])
+        if current_indexes:
+            for n, idx in enumerate(current_indexes, 1):
+                print(f"   {n}. {_icon(idx)} {idx['name']} ✅")
+                if idx.get("size_mb", 0) > 0:
+                    print(f"      📦 Size: {idx['size_mb']:.1f} MB")
+        else:
+            print("   📭 No indexes in current project")
+
+        other = {p: group for p, group in by_project.items() if group}
+        if other:
+            print("\n\n🗂️  Other Projects")
+            print("   " + "─" * 45)
+            for project_str in sorted(other):
+                group = other[project_str]
+                print(f"\n   📂 {Path(project_str).name}")
+                print(f"      {project_str}")
+                for idx in group:
+                    print(f"      • {_icon(idx)} {idx['name']} ✅")
+                    if idx.get("size_mb", 0) > 0:
+                        print(f"        📦 {idx['size_mb']:.1f} MB")
+
+        total = len(current_indexes) + sum(len(group) for group in other.values())
+        projects_count = (1 if current_indexes else 0) + len(other)
+        print("\n" + "=" * 50)
+        if total == 0:
+            print("💡 Get started:")
+            print("   leann build my-docs --docs ./documents")
+        else:
+            print(f"📊 Total: {total} indexes across {projects_count} projects")
+            if current_indexes:
+                example_name = current_indexes[0]["name"]
+                print("\n💫 Quick start (current project):")
+                print(f'   leann search {example_name} "your query"')
+                print(f"   leann ask {example_name} --interactive")
+
     def _discover_indexes_in_project(
-        self, project_path: Path, exclude_dirs: Optional[list[Path]] = None
+        self,
+        project_path: Path,
+        exclude_dirs: Optional[list[Path]] = None,
+        include_app_indexes: bool = True,
     ):
         """Discover all indexes in a project directory (both CLI and apps formats)
 
@@ -1066,8 +1195,14 @@ Examples:
                             "status": status,
                             "size_mb": size_mb,
                             "path": index_dir,
+                            "meta_path": str(meta_file),
+                            "project": str(project_path),
+                            "file_base": "documents.leann",
                         }
                     )
+
+        if not include_app_indexes:
+            return indexes
 
         # 2. Apps format: *.leann.meta.json files anywhere in the project
         cli_indexes_dir = project_path / ".leann" / "indexes"
@@ -1128,6 +1263,9 @@ Examples:
                         "status": status,
                         "size_mb": size_mb,
                         "path": meta_file,
+                        "meta_path": str(meta_file),
+                        "project": str(project_path),
+                        "file_base": file_base,
                     }
                 )
 
@@ -1409,6 +1547,8 @@ Examples:
         app_file_base: Optional[str] = None,
     ):
         """Delete a CLI index directory or APP index files safely."""
+        from .index_manifest import forget_dir, forget_index
+
         try:
             if is_app:
                 removed = 0
@@ -1430,6 +1570,8 @@ Examples:
                         errors += 1
 
                 if removed > 0 and errors == 0:
+                    if meta_file:
+                        forget_index(meta_file)
                     if project_path:
                         print(
                             f"✅ App index '{index_display_name}' removed from {project_path.name}"
@@ -1451,6 +1593,7 @@ Examples:
                 import shutil
 
                 shutil.rmtree(index_dir)
+                forget_dir(index_dir)
 
                 if project_path:
                     print(f"✅ Index '{index_display_name}' removed from {project_path.name}")
@@ -3348,7 +3491,7 @@ Examples:
         suppress = not getattr(args, "verbose", False)
 
         if args.command == "list":
-            self.list_indexes()
+            self.list_indexes(refresh=getattr(args, "refresh", False))
         elif args.command == "remove":
             self.remove_index(args.index_name, args.force)
         elif args.command == "build":

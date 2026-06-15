@@ -873,6 +873,16 @@ class LeannBuilder:
         with open(leann_meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
 
+        from .index_manifest import record_index
+
+        record_index(
+            leann_meta_path,
+            backend=self.backend_name,
+            embedding_model=self.embedding_model,
+            embedding_mode=self.embedding_mode,
+            dimensions=self.dimensions,
+        )
+
     def _build_bm25_fts5(self, index_dir: Path, index_name: str) -> None:
         """Build a SQLite FTS5 BM25 index alongside the vector index.
 
@@ -1012,6 +1022,16 @@ class LeannBuilder:
 
         with open(leann_meta_path, "w", encoding="utf-8") as f:
             json.dump(meta_data, f, indent=2)
+
+        from .index_manifest import record_index
+
+        record_index(
+            leann_meta_path,
+            backend=self.backend_name,
+            embedding_model=self.embedding_model,
+            embedding_mode=self.embedding_mode,
+            dimensions=self.dimensions,
+        )
 
         logger.info(f"Index built successfully from precomputed embeddings: {index_path}")
 

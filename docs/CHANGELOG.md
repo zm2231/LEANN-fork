@@ -8,6 +8,8 @@
   - `leann rebuild <index>` — re-run a build with the index's stored config (incremental delta by default, `--force` for full rebuild). (upstream #326)
   - Optional query log: set `LEANN_QUERY_LOG=<path>` and `LeannSearcher.search()` appends a JSONL record (query, top_k, result ids/scores, query embedding) per call, for offline benchmark replay. (upstream #325)
 
+- Added a global index manifest at `~/.leann/indexes.json` so `leann list` can render from cached index metadata instead of recursively scanning every registered project. Normal first-run list seeds only cheap CLI-layout indexes; `leann list --refresh` performs the explicit full scan for legacy app-format indexes.
+
 - Wave 1.5 multi-axis temporal search:
   - SIGNALS now defines `created_at`, `modified_at`, `event_time`, `indexed_at`, and temporal-axis diagnostics.
   - Filesystem and specialized readers emit available temporal axes while omitting meaningless `event_time` values.

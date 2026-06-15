@@ -4,6 +4,7 @@ import importlib
 import importlib.metadata
 import json
 import logging
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Union
 
@@ -63,10 +64,11 @@ def register_project_directory(project_dir: Optional[Union[str, Path]] = None):
     else:
         project_dir = Path(project_dir)
 
-    # Only register directories that have some kind of LEANN content.
-    # Check CLI-format first to avoid an expensive rglob on large directories.
+    # Only register directories that have some kind of LEANN content. Check the
+    # cheap CLI layout first; app-format discovery uses a pruned walk so broad
+    # project roots do not recurse into dependency/build/cache trees.
     has_cli_indexes = (project_dir / ".leann" / "indexes").exists()
-    if not has_cli_indexes and not any(project_dir.rglob("*.leann.meta.json")):
+    if not has_cli_indexes and not _has_app_index(project_dir):
         # Don't register if there are no LEANN indexes
         return
 
@@ -96,3 +98,30 @@ def register_project_directory(project_dir: Optional[Union[str, Path]] = None):
             logger.debug(f"Registered project directory: {project_str}")
         except Exception as e:
             logger.warning(f"Could not save project registry: {e}")
+
+
+def _has_app_index(project_dir: Path) -> bool:
+    skip_dirs = {
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".next",
+        "dist",
+        "build",
+        ".tox",
+        ".eggs",
+        "target",
+        ".worktrees",
+        ".cache",
+        ".leann",
+    }
+    try:
+        for _, dirnames, filenames in os.walk(project_dir):
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            if any(fname.endswith(".leann.meta.json") for fname in filenames):
+                return True
+    except (OSError, PermissionError):
+        return False
+    return False
