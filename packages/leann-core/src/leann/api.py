@@ -731,7 +731,8 @@ class LeannBuilder:
             metadata = dict(metadata)
 
         source_document_id = self._default_source_document_id(metadata)
-        metadata.setdefault("source_document_id", source_document_id)
+        if metadata.get("source_document_id") in (None, ""):
+            metadata["source_document_id"] = source_document_id
         if metadata.get("chunk_seq") is None:
             metadata["chunk_seq"] = self._chunk_seq_by_source_document_id[source_document_id]
             self._chunk_seq_by_source_document_id[source_document_id] += 1
@@ -740,6 +741,7 @@ class LeannBuilder:
                 chunk_seq = int(metadata["chunk_seq"])
             except (TypeError, ValueError):
                 chunk_seq = self._chunk_seq_by_source_document_id[source_document_id]
+                metadata["chunk_seq"] = chunk_seq
             self._chunk_seq_by_source_document_id[source_document_id] = max(
                 self._chunk_seq_by_source_document_id[source_document_id],
                 chunk_seq + 1,
