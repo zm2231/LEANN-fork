@@ -718,8 +718,8 @@ class LeannBuilder:
 
     @staticmethod
     def _default_source_document_id(metadata: dict[str, Any]) -> str:
-        for field in ("source_document_id", "file_path", "source", "file_name", "id"):
-            value = metadata.get(field)
+        for key in ("source_document_id", "file_path", "source", "file_name", "id"):
+            value = metadata.get(key)
             if value not in (None, ""):
                 return str(value)
         return "__default__"
@@ -1486,8 +1486,10 @@ class LeannSearcher:
         # top_k, and result IDs/scores. Useful for offline benchmark replay.
         self._query_log_path: Optional[str] = os.environ.get("LEANN_QUERY_LOG") or None
 
-        # Optional one-shot warmup at construction time to hide cold-start latency.
-        if self._warmup:
+        # Optional one-shot warmup at construction time to hide cold-start latency
+        # for recompute indexes. For no-recompute indexes, automatic warmup only
+        # adds an extra query-sized embedding call before the real search.
+        if self._warmup and self.recompute_embeddings:
             self.warmup()
 
     def warmup(self) -> None:

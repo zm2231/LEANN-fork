@@ -5,12 +5,9 @@ recompute_embeddings=False. Was the root of the Rubio agent's "stored-vector
 prefilter not firing" surprise.
 """
 import json
-import pickle
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 
 def _write_minimal_index(meta_overrides: dict) -> Path:
@@ -48,8 +45,15 @@ def _write_minimal_index(meta_overrides: dict) -> Path:
 
 class _StubBackendImpl:
     """Minimal stand-in for HNSWSearcher; auto-detect runs before any usage."""
+
+    warmup_calls = 0
+
     def __init__(self, *a, **kw):
         pass
+
+    def compute_query_embedding(self, *a, **kw):
+        type(self).warmup_calls += 1
+        return []
 
 
 class _StubBackend:
@@ -66,8 +70,9 @@ def _make_searcher(meta_overrides, **searcher_kwargs):
     from leann.api import LeannSearcher
 
     base = _write_minimal_index(meta_overrides)
+    enable_warmup = searcher_kwargs.pop("enable_warmup", False)
     with patch.dict("leann.api.BACKEND_REGISTRY", {"hnsw": _StubBackend}):
-        return LeannSearcher(str(base), enable_warmup=False, **searcher_kwargs)
+        return LeannSearcher(str(base), enable_warmup=enable_warmup, **searcher_kwargs)
 
 
 def test_searcher_autodetects_recompute_false_from_meta():
@@ -109,3 +114,19 @@ def test_searcher_missing_backend_kwargs_defaults_to_recompute_true():
     with patch.dict("leann.api.BACKEND_REGISTRY", {"hnsw": _StubBackend}):
         s = LeannSearcher(str(base), enable_warmup=False)
     assert s.recompute_embeddings is True
+
+
+def test_no_recompute_searcher_skips_automatic_warmup_embedding():
+    _StubBackendImpl.warmup_calls = 0
+    s = _make_searcher({"backend_kwargs.is_recompute": False}, enable_warmup=True)
+
+    assert s.recompute_embeddings is False
+    assert _StubBackendImpl.warmup_calls == 0
+
+
+def test_recompute_searcher_keeps_automatic_warmup_embedding():
+    _StubBackendImpl.warmup_calls = 0
+    s = _make_searcher({"backend_kwargs.is_recompute": True}, enable_warmup=True)
+
+    assert s.recompute_embeddings is True
+    assert _StubBackendImpl.warmup_calls == 1
