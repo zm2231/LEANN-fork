@@ -31,7 +31,7 @@ class SearchRequest(_BaseModel):
     complexity: int = 64
     beam_width: int = 1
     prune_ratio: float = 0.0
-    recompute_embeddings: bool = True
+    recompute_embeddings: bool | None = None
     pruning_strategy: str = "global"
     use_grep: bool = False
 

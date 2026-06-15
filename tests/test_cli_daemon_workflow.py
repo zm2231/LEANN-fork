@@ -50,6 +50,47 @@ def test_search_passes_daemon_flags_to_searcher(monkeypatch):
     assert captured["search"]["recompute_embeddings"] is True
 
 
+def test_search_allows_recompute_autodetect_when_flag_omitted(monkeypatch):
+    cli = LeannCLI()
+    monkeypatch.setattr(
+        cli,
+        "_resolve_index_path",
+        lambda *args, **kwargs: "/tmp/demo/documents.leann",
+    )
+
+    captured: dict[str, dict[str, Any]] = {"search": {}}
+
+    class DummySearcher:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def search(self, *args, **kwargs):
+            captured["search"] = kwargs
+            return []
+
+    monkeypatch.setattr("leann.cli.LeannSearcher", DummySearcher)
+
+    args = argparse.Namespace(
+        index_name="demo",
+        query="hello",
+        top_k=3,
+        complexity=64,
+        beam_width=1,
+        prune_ratio=0.0,
+        recompute_embeddings=None,
+        pruning_strategy="global",
+        non_interactive=True,
+        show_metadata=False,
+        embedding_prompt_template=None,
+        use_daemon=True,
+        daemon_ttl=222,
+        enable_warmup=True,
+    )
+    asyncio.run(cli.search_documents(args))
+
+    assert captured["search"]["recompute_embeddings"] is None
+
+
 def test_warmup_command_calls_searcher_warmup(monkeypatch):
     cli = LeannCLI()
     monkeypatch.setattr(

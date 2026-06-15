@@ -472,8 +472,11 @@ Examples:
             "--recompute",
             dest="recompute_embeddings",
             action=argparse.BooleanOptionalAction,
-            default=True,
-            help="Enable/disable embedding recomputation (default: enabled). Should not do a `no-recompute` search in a `recompute` build.",
+            default=None,
+            help=(
+                "Enable/disable embedding recomputation. By default, LEANN auto-detects "
+                "from the index metadata."
+            ),
         )
         search_parser.add_argument(
             "--pruning-strategy",
@@ -626,8 +629,11 @@ Examples:
             "--recompute",
             dest="recompute_embeddings",
             action=argparse.BooleanOptionalAction,
-            default=True,
-            help="Enable/disable embedding recomputation during ask (default: enabled)",
+            default=None,
+            help=(
+                "Enable/disable embedding recomputation during ask. By default, LEANN "
+                "auto-detects from the index metadata."
+            ),
         )
         ask_parser.add_argument(
             "--pruning-strategy",
