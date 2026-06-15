@@ -48,3 +48,23 @@ def test_add_text_uses_independent_sequences_per_source_document():
     assert builder.chunks[0]["metadata"]["chunk_seq"] == 0
     assert builder.chunks[1]["metadata"]["chunk_seq"] == 0
     assert builder.chunks[2]["metadata"]["chunk_seq"] == 1
+
+
+def test_add_text_replaces_empty_source_document_id():
+    builder = LeannBuilder(backend_name="hnsw")
+
+    builder.add_text("empty source", metadata={"source_document_id": "", "file_path": "a.md"})
+    builder.add_text("none source", metadata={"source_document_id": None, "file_path": "b.md"})
+
+    assert builder.chunks[0]["metadata"]["source_document_id"] == "a.md"
+    assert builder.chunks[1]["metadata"]["source_document_id"] == "b.md"
+
+
+def test_add_text_replaces_invalid_chunk_seq():
+    builder = LeannBuilder(backend_name="hnsw")
+
+    builder.add_text("bad seq", metadata={"file_path": "a.md", "chunk_seq": "abc"})
+    builder.add_text("next seq", metadata={"file_path": "a.md"})
+
+    assert builder.chunks[0]["metadata"]["chunk_seq"] == 0
+    assert builder.chunks[1]["metadata"]["chunk_seq"] == 1
