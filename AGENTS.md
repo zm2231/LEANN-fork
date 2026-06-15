@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -76,7 +76,7 @@ uv run pre-commit run --all-files
 - `leann-backend-hnsw/`: Default backend using FAISS HNSW for fast in-memory search
 - `leann-backend-ivf/`: IVF backend (FAISS IndexIVFFlat + DirectMap.Hashtable) supporting in-place add/remove without rebuild
 - `leann-backend-diskann/`: DiskANN backend for larger-than-memory datasets
-- `leann-mcp/`: MCP server for Claude Code integration
+- `leann-mcp/`: MCP server for Codex integration
 
 Backends are auto-discovered via `leann-backend-*` naming convention and registered in `registry.py`.
 

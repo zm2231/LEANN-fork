@@ -908,7 +908,11 @@ def compute_embeddings_openai(
         raise RuntimeError("OPENAI_API_KEY environment variable not set")
 
     # Create OpenAI client
-    client = openai.OpenAI(api_key=resolved_api_key, base_url=resolved_base_url)
+    client = openai.OpenAI(
+        api_key=resolved_api_key,
+        base_url=resolved_base_url,
+        timeout=float(os.environ.get("LEANN_OPENAI_TIMEOUT", "600")),
+    )
 
     logger.info(
         f"Computing embeddings for {len(texts)} texts using OpenAI API, model: '{model_name}'"

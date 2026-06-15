@@ -18,6 +18,7 @@ import argparse
 import asyncio
 import importlib.util
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,7 +48,19 @@ def _load_reader(name: str, cls_name: str):
     return getattr(module, cls_name)(manifest)
 
 
-def _iter_chunks(max_count_per_source: int):
+def _cwd_match(cwd: str | None, prefixes: tuple[str, ...]) -> bool:
+    if not prefixes:
+        return True
+    if not cwd:
+        return False
+    return any(cwd == p or cwd.startswith(p + "/") for p in prefixes)
+
+
+def _iter_chunks(
+    max_count_per_source: int,
+    since: datetime | None = None,
+    cwd_prefixes: tuple[str, ...] = (),
+):
     for name, cls_name in READER_SPECS:
         reader = _load_reader(name, cls_name)
         report = reader.validate()
@@ -55,7 +68,11 @@ def _iter_chunks(max_count_per_source: int):
             print(f"[{name}] skipped: {report.status} ({report.errors})", file=sys.stderr)
             continue
         count = 0
-        for chunk in reader.iter_chunks():
+        for chunk in reader.iter_chunks(since=since):
+            if cwd_prefixes and not _cwd_match(
+                chunk.metadata.get("extra", {}).get("cwd"), cwd_prefixes
+            ):
+                continue
             yield name, chunk
             count += 1
             if max_count_per_source > 0 and count >= max_count_per_source:
@@ -64,14 +81,21 @@ def _iter_chunks(max_count_per_source: int):
 
 
 async def main(args: argparse.Namespace) -> None:
-    from llama_index.core import Document
     from leann.cli import LeannCLI
+    from llama_index.core import Document
 
     documents: list[Document] = []
     per_source_counts: dict[str, int] = {}
     long_chunk_count = 0
     char_cap = args.chunk_char_cap
-    for source_name, chunk in _iter_chunks(args.max_count):
+    since = None
+    if args.since_days > 0:
+        since = datetime.now(UTC) - timedelta(days=args.since_days)
+        print(f"[build] since={since.isoformat()} ({args.since_days}d window)", file=sys.stderr)
+    cwd_prefixes = tuple(p for p in (args.cwd_prefix or []) if p)
+    if cwd_prefixes:
+        print(f"[build] cwd-prefix filter: {cwd_prefixes}", file=sys.stderr)
+    for source_name, chunk in _iter_chunks(args.max_count, since=since, cwd_prefixes=cwd_prefixes):
         text = chunk.text
         if char_cap > 0 and len(text) > char_cap:
             text = text[:char_cap] + f"\n…[truncated to {char_cap} chars]"
@@ -129,6 +153,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-api-key", default="ignored")
     parser.add_argument("--backend", default="hnsw")
     parser.add_argument("--force", action="store_true", help="Overwrite existing index")
+    parser.add_argument(
+        "--cwd-prefix",
+        action="append",
+        default=None,
+        help="Only ingest chunks whose session cwd matches this path prefix (repeatable)",
+    )
+    parser.add_argument(
+        "--since-days",
+        type=int,
+        default=0,
+        help="Only ingest sessions with mtime within the last N days (0 = no window, default)",
+    )
     parser.add_argument(
         "--chunk-char-cap",
         type=int,
