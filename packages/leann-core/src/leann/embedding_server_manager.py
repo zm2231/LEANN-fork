@@ -869,7 +869,12 @@ class EmbeddingServerManager:
             return None
 
         info = self._query_server_info(port)
-        if not self._server_info_matches(info, config_signature, expected_pid=pid):
+        if info is None:
+            logger.info(
+                "Daemon on port %s did not answer identity probe; reusing exact registry match",
+                port,
+            )
+        elif not self._server_info_matches(info, config_signature, expected_pid=pid):
             logger.warning(
                 "Ignoring daemon registry record with mismatched server identity on port %s",
                 port,
