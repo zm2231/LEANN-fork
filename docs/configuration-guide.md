@@ -137,6 +137,43 @@ When you set these options while building an index, LEANN stores them in `meta.j
 
 **Tip:** If your runtime does not require an API key (many local stacks don’t), leave `--api-key` unset. LEANN will skip injecting credentials.
 
+### Build Defaults and Presets
+
+New CLI builds can read optional machine defaults from `~/.leann/build_defaults.json`, or from a custom path in `LEANN_BUILD_DEFAULTS`. Defaults fill any build option that still has LEANN's built-in CLI default after parsing, so non-default command-line values override them.
+
+```json
+{
+  "defaults": {
+    "embedding_model": "BAAI/bge-m3",
+    "embedding_mode": "openai",
+    "embedding_api_base": "http://127.0.0.1:8100/v1",
+    "embedding_api_key": "local-dev-key",
+    "recompute": false,
+    "compact": false
+  },
+  "presets": {
+    "meetings": {
+      "file_types": ".md,.txt",
+      "doc_chunk_size": 384,
+      "doc_chunk_overlap": 96
+    },
+    "code": {
+      "use_ast_chunking": true,
+      "code_chunk_size": 640,
+      "code_chunk_overlap": 80
+    }
+  }
+}
+```
+
+Use a preset for one build:
+
+```bash
+leann build cadence-fast --docs ./notes --build-preset meetings
+```
+
+Each completed `leann build` persists its resolved `build_config` into the index metadata. `leann rebuild <index>` and `leann watch <index>` replay that stored index config instead of reading your current machine defaults, so changing your global default embedding model later does not silently mutate old indexes.
+
 ### Python API Usage
 
 You can pass the same configuration from Python:

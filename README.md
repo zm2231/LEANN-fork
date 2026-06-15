@@ -398,7 +398,7 @@ LEANN_LLM_DEVICE             # GPU for HFChat LLM (e.g., cuda:1, or "cuda" for m
 --backend-name NAME          # Backend to use: hnsw or diskann (default: hnsw)
 --graph-degree N             # Graph degree for index construction (default: 32)
 --build-complexity N         # Build complexity for index construction (default: 64)
---compact / --no-compact     # Use compact storage (default: true). Must be `no-compact` for `no-recompute` build.
+--compact / --no-compact     # Use compact storage (default: false). Must be `no-compact` for `no-recompute` build.
 --recompute / --no-recompute # Enable/disable embedding recomputation (default: enabled). Should not do a `no-recompute` search in a `recompute` build.
 ```
 
@@ -1143,7 +1143,7 @@ Options:
   --graph-degree N             Graph degree (default: 32)
   --complexity N               Build complexity (default: 64)
   --force                      Force rebuild existing index
-  --compact / --no-compact     Use compact storage (default: true). Must be `no-compact` for `no-recompute` build.
+  --compact / --no-compact     Use compact storage (default: false). Must be `no-compact` for `no-recompute` build.
   --recompute / --no-recompute Enable recomputation (default: true)
 ```
 

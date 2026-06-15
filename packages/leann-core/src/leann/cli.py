@@ -36,6 +36,82 @@ from .sync import FileSynchronizer
 
 logger = logging.getLogger(__name__)
 
+BUILD_CONFIG_VERSION = 1
+
+BUILD_DEFAULTS: dict[str, Any] = {
+    "backend_name": "hnsw",
+    "embedding_model": "facebook/contriever",
+    "embedding_mode": "sentence-transformers",
+    "embedding_host": None,
+    "embedding_api_base": None,
+    "embedding_api_key": None,
+    "embedding_prompt_template": None,
+    "query_prompt_template": None,
+    "graph_degree": 32,
+    "complexity": 64,
+    "num_threads": 1,
+    "compact": False,
+    "recompute": True,
+    "file_types": None,
+    "include_hidden": False,
+    "doc_chunk_size": 256,
+    "doc_chunk_overlap": 128,
+    "code_chunk_size": 512,
+    "code_chunk_overlap": 50,
+    "use_ast_chunking": False,
+    "ast_chunk_size": 300,
+    "ast_chunk_overlap": 64,
+    "ast_fallback_traditional": True,
+}
+
+BUILD_CONFIG_FIELDS = tuple(BUILD_DEFAULTS.keys())
+
+BUILD_OPTION_FIELDS: dict[str, str] = {
+    "--backend-name": "backend_name",
+    "--embedding-model": "embedding_model",
+    "--embedding-mode": "embedding_mode",
+    "--embedding-host": "embedding_host",
+    "--embedding-api-base": "embedding_api_base",
+    "--embedding-api-key": "embedding_api_key",
+    "--embedding-prompt-template": "embedding_prompt_template",
+    "--query-prompt-template": "query_prompt_template",
+    "--graph-degree": "graph_degree",
+    "--complexity": "complexity",
+    "--num-threads": "num_threads",
+    "--compact": "compact",
+    "--no-compact": "compact",
+    "--recompute": "recompute",
+    "--no-recompute": "recompute",
+    "--file-types": "file_types",
+    "--include-hidden": "include_hidden",
+    "--no-include-hidden": "include_hidden",
+    "--doc-chunk-size": "doc_chunk_size",
+    "--doc-chunk-overlap": "doc_chunk_overlap",
+    "--code-chunk-size": "code_chunk_size",
+    "--code-chunk-overlap": "code_chunk_overlap",
+    "--use-ast-chunking": "use_ast_chunking",
+    "--ast-chunk-size": "ast_chunk_size",
+    "--ast-chunk-overlap": "ast_chunk_overlap",
+    "--ast-fallback-traditional": "ast_fallback_traditional",
+    "--no-ast-fallback-traditional": "ast_fallback_traditional",
+}
+
+
+class LeannArgumentParser(argparse.ArgumentParser):
+    def parse_args(self, args=None, namespace=None):
+        argv = list(sys.argv[1:] if args is None else args)
+        parsed = super().parse_args(args, namespace)
+        explicit_build_options = set()
+        for token in argv:
+            if not token.startswith("--"):
+                continue
+            option = token.split("=", 1)[0]
+            field = BUILD_OPTION_FIELDS.get(option)
+            if field:
+                explicit_build_options.add(field)
+        parsed._explicit_build_options = explicit_build_options
+        return parsed
+
 
 def _normalize_path(path: str) -> str:
     """Return absolute path string for consistent keys."""
@@ -235,7 +311,7 @@ class LeannCLI:
         return meta_file.exists()
 
     def create_parser(self) -> argparse.ArgumentParser:
-        parser = argparse.ArgumentParser(
+        parser = LeannArgumentParser(
             prog="leann",
             description="The smallest vector index in the world. RAG Everything with LEANN!",
             formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -344,6 +420,15 @@ Examples:
             help="Force full rebuild of existing index (without this, build does incremental update: add new files only)",
         )
         build_parser.add_argument(
+            "--build-preset",
+            type=str,
+            default=None,
+            help=(
+                "Apply a named preset from ~/.leann/build_defaults.json or LEANN_BUILD_DEFAULTS. "
+                "Defaults only affect new/manual builds; rebuild replays the index build_config."
+            ),
+        )
+        build_parser.add_argument(
             "--graph-degree", type=int, default=32, help="Graph degree (default: 32)"
         )
         build_parser.add_argument(
@@ -416,7 +501,7 @@ Examples:
         )
         build_parser.add_argument(
             "--ast-fallback-traditional",
-            action="store_true",
+            action=argparse.BooleanOptionalAction,
             default=True,
             help="Fall back to traditional chunking if AST chunking fails (default: True)",
         )
@@ -2352,6 +2437,73 @@ Examples:
         with open(sync_config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
+    def _load_build_defaults(self, preset: Optional[str] = None) -> dict[str, Any]:
+        path = Path(
+            os.environ.get("LEANN_BUILD_DEFAULTS", "~/.leann/build_defaults.json")
+        ).expanduser()
+        if not path.exists():
+            return {}
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as exc:
+            print(f"Warning: Could not load build defaults from {path}: {exc}")
+            return {}
+
+        defaults = data.get("defaults", data) if isinstance(data, dict) else {}
+        if preset:
+            presets = data.get("presets", {}) if isinstance(data, dict) else {}
+            preset_defaults = presets.get(preset)
+            if not isinstance(preset_defaults, dict):
+                print(f"Warning: build preset '{preset}' not found in {path}")
+                preset_defaults = {}
+            defaults = {**defaults, **preset_defaults}
+        if not isinstance(defaults, dict):
+            return {}
+        return {k: v for k, v in defaults.items() if k in BUILD_DEFAULTS}
+
+    def _apply_build_defaults(self, args) -> None:
+        if getattr(args, "_from_rebuild", False):
+            return
+        defaults = self._load_build_defaults(getattr(args, "build_preset", None))
+        if not defaults:
+            return
+        applied = []
+        explicit_options = getattr(args, "_explicit_build_options", set())
+        for key, value in defaults.items():
+            if key in explicit_options:
+                continue
+            if getattr(args, key, None) == BUILD_DEFAULTS[key]:
+                setattr(args, key, value)
+                applied.append(key)
+        if applied:
+            source = os.environ.get("LEANN_BUILD_DEFAULTS", "~/.leann/build_defaults.json")
+            print(f"Applied build defaults from {source}: {', '.join(sorted(applied))}")
+
+    def _make_build_config(self, args, docs_paths: list[str]) -> dict[str, Any]:
+        config = {
+            "version": BUILD_CONFIG_VERSION,
+            "index_name": args.index_name,
+            "docs": [str(Path(p).expanduser().resolve()) for p in docs_paths],
+            "build_preset": getattr(args, "build_preset", None),
+        }
+        for key in BUILD_CONFIG_FIELDS:
+            config[key] = getattr(args, key)
+        return config
+
+    def _write_build_config(self, index_dir: Path, args, docs_paths: list[str]) -> None:
+        meta_path = index_dir / "documents.leann.meta.json"
+        if not meta_path.exists():
+            return
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            meta["build_config"] = self._make_build_config(args, docs_paths)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception as exc:
+            print(f"Warning: Could not persist build_config to {meta_path}: {exc}")
+
     def _load_sync_roots(self, index_dir: Path) -> list[str]:
         """Load sync roots from index dir (for path resolution in incremental updates)."""
         sync_config_path = index_dir / "sync_roots.json"
@@ -2434,13 +2586,67 @@ Examples:
                     chunk_ids_by_file.setdefault(file_path, []).append(str(chunk_id))
         return chunk_ids_by_file
 
+    def _args_from_build_config(
+        self, index_name: str, build_config: dict[str, Any], *, force: bool = False
+    ) -> Optional[list[str]]:
+        docs = build_config.get("docs") or build_config.get("roots")
+        if not docs:
+            return None
+        build_args_list = ["build", index_name, "--docs", *[str(p) for p in docs]]
+
+        def add_value(key: str) -> None:
+            value = build_config.get(key)
+            if value is not None:
+                build_args_list.extend([f"--{key.replace('_', '-')}", str(value)])
+
+        for key in (
+            "backend_name",
+            "embedding_model",
+            "embedding_mode",
+            "embedding_host",
+            "embedding_api_base",
+            "embedding_api_key",
+            "embedding_prompt_template",
+            "query_prompt_template",
+            "graph_degree",
+            "complexity",
+            "num_threads",
+            "file_types",
+            "doc_chunk_size",
+            "doc_chunk_overlap",
+            "code_chunk_size",
+            "code_chunk_overlap",
+            "ast_chunk_size",
+            "ast_chunk_overlap",
+        ):
+            add_value(key)
+
+        for key in ("compact", "recompute", "include_hidden"):
+            if key in build_config:
+                flag = key.replace("_", "-")
+                build_args_list.append(f"--{flag}" if build_config[key] else f"--no-{flag}")
+
+        if build_config.get("use_ast_chunking"):
+            build_args_list.append("--use-ast-chunking")
+        if "ast_fallback_traditional" in build_config:
+            build_args_list.append(
+                "--ast-fallback-traditional"
+                if build_config["ast_fallback_traditional"]
+                else "--no-ast-fallback-traditional"
+            )
+        if force:
+            build_args_list.append("--force")
+        return build_args_list
+
     async def build_index(self, args):
+        self._apply_build_defaults(args)
         docs_paths = args.docs
         # Use current directory name if index_name not provided
         if args.index_name:
             index_name = args.index_name
         else:
             index_name = Path.cwd().name
+            args.index_name = index_name
             print(f"Using current directory name as index: '{index_name}'")
 
         index_dir = self.indexes_dir / index_name
@@ -2502,6 +2708,44 @@ Examples:
             new_paths, removed_paths, modified_paths = self._detect_build_changes(synchronizers)
 
             if not new_paths and not removed_paths and not modified_paths:
+                if meta_path.exists():
+                    try:
+                        with open(meta_path, encoding="utf-8") as f:
+                            meta = json.load(f)
+                        current_build_config = self._make_build_config(args, docs_paths)
+                        stored_build_config = meta.get("build_config")
+                        if stored_build_config is None:
+                            bkw = meta.get("backend_kwargs", {})
+                            meta_matches_args = (
+                                meta.get("backend_name") == args.backend_name
+                                and meta.get("embedding_model") == args.embedding_model
+                                and meta.get("embedding_mode") == args.embedding_mode
+                                and bkw.get("is_compact", False) == args.compact
+                                and bkw.get("is_recompute", True) == args.recompute
+                            )
+                            if meta_matches_args:
+                                self._write_sync_config(
+                                    index_dir,
+                                    self._resolve_sync_roots(docs_paths),
+                                    self._parse_file_types(args.file_types),
+                                    self._sync_ignore_patterns(args.include_hidden),
+                                )
+                                self._write_build_config(index_dir, args, docs_paths)
+                                print("Index up to date; build_config recorded.")
+                            else:
+                                print(
+                                    "Index up to date, but build settings differ from the "
+                                    "existing index. Use --force to rebuild with new settings."
+                                )
+                            return
+                        if stored_build_config != current_build_config:
+                            print(
+                                "Index up to date, but build settings differ from stored "
+                                "build_config. Use --force to rebuild with new settings."
+                            )
+                            return
+                    except Exception as exc:
+                        print(f"Warning: Could not compare stored build_config: {exc}")
                 print("Index up to date.")
                 return
 
@@ -2553,6 +2797,7 @@ Examples:
                             self._parse_file_types(args.file_types),
                             self._sync_ignore_patterns(args.include_hidden),
                         )
+                        self._write_build_config(index_dir, args, docs_paths)
                         self.register_project_dir()
                         return
 
@@ -2603,6 +2848,7 @@ Examples:
                             self._parse_file_types(args.file_types),
                             self._sync_ignore_patterns(args.include_hidden),
                         )
+                        self._write_build_config(index_dir, args, docs_paths)
                         self.register_project_dir()
                         return
 
@@ -2621,6 +2867,7 @@ Examples:
                             self._parse_file_types(args.file_types),
                             self._sync_ignore_patterns(args.include_hidden),
                         )
+                        self._write_build_config(index_dir, args, docs_paths)
                         self.register_project_dir()
                         return
 
@@ -2664,6 +2911,7 @@ Examples:
             self._parse_file_types(args.file_types),
             self._sync_ignore_patterns(args.include_hidden),
         )
+        self._write_build_config(index_dir, args, docs_paths)
         print(f"Index built at {index_path}")
         self.register_project_dir()
 
@@ -2741,6 +2989,29 @@ Examples:
         if not resolved:
             return None
         index_dir = resolved["index_dir"]
+        meta_path = index_dir / "documents.leann.meta.json"
+        if not meta_path.exists():
+            if verbose:
+                print(f"Cannot rebuild '{index_name}': index metadata missing at {meta_path}.")
+            else:
+                print(f"Index metadata missing for '{index_name}', cannot rebuild.")
+            return None
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+
+        build_config = meta.get("build_config")
+        if isinstance(build_config, dict):
+            build_args_list = self._args_from_build_config(
+                index_name, build_config, force=force
+            )
+            if build_args_list is not None:
+                return build_args_list
+            if verbose:
+                print(
+                    f"Warning: build_config for '{index_name}' is missing document roots; "
+                    "falling back to legacy sync_roots.json."
+                )
+
         sync_config_path = index_dir / "sync_roots.json"
         if not sync_config_path.exists():
             if verbose:
@@ -2757,16 +3028,6 @@ Examples:
             if verbose:
                 print(f"Cannot rebuild '{index_name}': sync config has no document roots.")
             return None
-
-        meta_path = index_dir / "documents.leann.meta.json"
-        if not meta_path.exists():
-            if verbose:
-                print(f"Cannot rebuild '{index_name}': index metadata missing at {meta_path}.")
-            else:
-                print(f"Index metadata missing for '{index_name}', cannot rebuild.")
-            return None
-        with open(meta_path, encoding="utf-8") as f:
-            meta = json.load(f)
 
         build_args_list = [
             "build",
@@ -2803,6 +3064,7 @@ Examples:
             return
         parser = self.create_parser()
         build_args = parser.parse_args(build_args_list)
+        build_args._from_rebuild = True
         await self.build_index(build_args)
 
     async def _watch_trigger_build(self, index_name: str) -> None:
@@ -2812,6 +3074,7 @@ Examples:
             return
         parser = self.create_parser()
         build_args = parser.parse_args(build_args_list)
+        build_args._from_rebuild = True
         await self.build_index(build_args)
 
     async def watch_index(self, args):
