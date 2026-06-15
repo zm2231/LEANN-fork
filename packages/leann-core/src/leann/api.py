@@ -714,10 +714,36 @@ class LeannBuilder:
 
         self.backend_kwargs = backend_kwargs
         self.chunks: list[dict[str, Any]] = []
+        self._chunk_seq_by_source_document_id: defaultdict[str, int] = defaultdict(int)
+
+    @staticmethod
+    def _default_source_document_id(metadata: dict[str, Any]) -> str:
+        for field in ("source_document_id", "file_path", "source", "file_name", "id"):
+            value = metadata.get(field)
+            if value not in (None, ""):
+                return str(value)
+        return "__default__"
 
     def add_text(self, text: str, metadata: Optional[dict[str, Any]] = None):
         if metadata is None:
             metadata = {}
+        else:
+            metadata = dict(metadata)
+
+        source_document_id = self._default_source_document_id(metadata)
+        metadata.setdefault("source_document_id", source_document_id)
+        if metadata.get("chunk_seq") is None:
+            metadata["chunk_seq"] = self._chunk_seq_by_source_document_id[source_document_id]
+            self._chunk_seq_by_source_document_id[source_document_id] += 1
+        else:
+            try:
+                chunk_seq = int(metadata["chunk_seq"])
+            except (TypeError, ValueError):
+                chunk_seq = self._chunk_seq_by_source_document_id[source_document_id]
+            self._chunk_seq_by_source_document_id[source_document_id] = max(
+                self._chunk_seq_by_source_document_id[source_document_id],
+                chunk_seq + 1,
+            )
         passage_id = metadata.get("id", str(len(self.chunks)))
         chunk_data = {"id": passage_id, "text": text, "metadata": metadata}
         self.chunks.append(chunk_data)

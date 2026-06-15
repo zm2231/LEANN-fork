@@ -41,6 +41,9 @@ except json.JSONDecodeError:
     logger.warning("Failed to parse LEANN_EMBEDDING_OPTIONS; ignoring provider options")
     PROVIDER_OPTIONS = {}
 
+_SERVER_INFO_REQUEST = "__LEANN_SERVER_INFO__"
+_SERVER_PROTOCOL = "leann-embedding-server"
+
 
 def create_diskann_embedding_server(
     passages_file: Optional[str] = None,
@@ -110,6 +113,17 @@ def create_diskann_embedding_server(
     passages = PassageManager(meta["passage_sources"], metadata_file_path=passages_file)
     logger.info(f"Loaded PassageManager with {len(passages)} passages from metadata")
 
+    server_info = {
+        "protocol": _SERVER_PROTOCOL,
+        "backend_module_name": "leann_backend_diskann.diskann_embedding_server",
+        "pid": os.getpid(),
+        "port": zmq_port,
+        "model_name": model_name,
+        "passages_file": str(Path(passages_file).resolve()),
+        "embedding_mode": embedding_mode,
+        "distance_metric": distance_metric or "",
+    }
+
     # Import protobuf after ensuring the path is correct
     try:
         from . import embedding_pb2
@@ -171,6 +185,13 @@ def create_diskann_embedding_server(
                         import msgpack
 
                         request = msgpack.unpackb(message)
+                        if (
+                            isinstance(request, list)
+                            and len(request) == 1
+                            and request[0] == _SERVER_INFO_REQUEST
+                        ):
+                            socket.send(msgpack.packb(server_info, use_bin_type=True))
+                            continue
                         # For BaseSearcher compatibility, request is a list of texts directly
                         if isinstance(request, list) and all(
                             isinstance(item, str) for item in request
@@ -309,6 +330,13 @@ def create_diskann_embedding_server(
                             import msgpack
 
                             request = msgpack.unpackb(message)
+                            if (
+                                isinstance(request, list)
+                                and len(request) == 1
+                                and request[0] == _SERVER_INFO_REQUEST
+                            ):
+                                rep_socket.send(msgpack.packb(server_info, use_bin_type=True))
+                                continue
                             if isinstance(request, list) and all(
                                 isinstance(item, str) for item in request
                             ):

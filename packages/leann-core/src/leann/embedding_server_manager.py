@@ -12,6 +12,9 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import msgpack
+import zmq
+
 from .settings import encode_provider_options
 
 # Lightweight, self-contained server manager with no cross-process inspection
@@ -27,6 +30,8 @@ _LOCK_STALE_SECONDS = 600
 _FLOCK_TIMEOUT_SECONDS = 300
 _REGISTRY_LOCKS_GUARD = threading.Lock()
 _REGISTRY_LOCKS: dict[str, threading.Lock] = {}
+_SERVER_INFO_REQUEST = ["__LEANN_SERVER_INFO__"]
+_SERVER_PROTOCOL = "leann-embedding-server"
 
 
 def _flock_acquire(lock_file) -> None:  # type: ignore[type-arg]
@@ -399,7 +404,9 @@ class EmbeddingServerManager:
                 provider_options=provider_options,
                 config_signature=config_signature,
             )
-            started, ready_port = self._wait_for_server_ready_colab(actual_port)
+            started, ready_port = self._wait_for_server_ready_colab(
+                actual_port, config_signature=config_signature
+            )
             if started:
                 self._server_config = config_signature or {
                     "model_name": model_name,
@@ -435,7 +442,9 @@ class EmbeddingServerManager:
                 provider_options=provider_options,
                 config_signature=config_signature,
             )
-            started, ready_port = self._wait_for_server_ready(port)
+            started, ready_port = self._wait_for_server_ready(
+                port, config_signature=config_signature
+            )
             if started:
                 self._server_config = config_signature or {
                     "model_name": model_name,
@@ -560,13 +569,20 @@ class EmbeddingServerManager:
             except Exception:
                 pass
 
-    def _wait_for_server_ready(self, port: int) -> tuple[bool, int]:
+    def _wait_for_server_ready(
+        self, port: int, *, config_signature: Optional[dict[str, Any]] = None
+    ) -> tuple[bool, int]:
         """Wait for the server to be ready."""
         max_wait, wait_interval = 120, 0.5
         for _ in range(int(max_wait / wait_interval)):
             if _check_port(port):
-                logger.info("Embedding server is ready!")
-                return True, port
+                if config_signature is None:
+                    logger.info("Embedding server is ready!")
+                    return True, port
+                info = self._query_server_info(port)
+                if self._server_info_matches(info, config_signature):
+                    logger.info("Embedding server is ready!")
+                    return True, port
 
             if self.server_process and self.server_process.poll() is not None:
                 logger.error("Server terminated during startup.")
@@ -698,14 +714,21 @@ class EmbeddingServerManager:
                 "provider_options": provider_options or {},
             }
 
-    def _wait_for_server_ready_colab(self, port: int) -> tuple[bool, int]:
+    def _wait_for_server_ready_colab(
+        self, port: int, *, config_signature: Optional[dict[str, Any]] = None
+    ) -> tuple[bool, int]:
         """Wait for the server to be ready with Colab-specific timeout."""
         max_wait, wait_interval = 30, 0.5  # Shorter timeout for Colab
 
         for _ in range(int(max_wait / wait_interval)):
             if _check_port(port):
-                logger.info("Colab embedding server is ready!")
-                return True, port
+                if config_signature is None:
+                    logger.info("Colab embedding server is ready!")
+                    return True, port
+                info = self._query_server_info(port)
+                if self._server_info_matches(info, config_signature):
+                    logger.info("Colab embedding server is ready!")
+                    return True, port
 
             if self.server_process and self.server_process.poll() is not None:
                 # Check for error output
@@ -845,9 +868,71 @@ class EmbeddingServerManager:
             target.unlink(missing_ok=True)
             return None
 
+        info = self._query_server_info(port)
+        if not self._server_info_matches(info, config_signature, expected_pid=pid):
+            logger.warning(
+                "Ignoring daemon registry record with mismatched server identity on port %s",
+                port,
+            )
+            target.unlink(missing_ok=True)
+            return None
+
         self._registry_path = target
         logger.info("Reusing daemonized embedding server on port %s", port)
         return port
+
+    def _query_server_info(self, port: int, timeout_ms: int = 2000) -> Optional[dict[str, Any]]:
+        """Ask a ZMQ daemon to identify itself before reuse/readiness decisions."""
+        context = zmq.Context()
+        socket = context.socket(zmq.REQ)
+        socket.setsockopt(zmq.RCVTIMEO, timeout_ms)
+        socket.setsockopt(zmq.SNDTIMEO, timeout_ms)
+        socket.setsockopt(zmq.LINGER, 0)
+        try:
+            socket.connect(f"tcp://localhost:{port}")
+            socket.send(msgpack.packb(_SERVER_INFO_REQUEST))
+            response = msgpack.unpackb(socket.recv(), raw=False)
+        except Exception as exc:
+            logger.debug("Failed to query embedding server info on port %s: %s", port, exc)
+            return None
+        finally:
+            try:
+                socket.close(0)
+            except Exception:
+                pass
+            try:
+                context.term()
+            except Exception:
+                pass
+
+        if isinstance(response, dict):
+            return response
+        return None
+
+    def _server_info_matches(
+        self,
+        info: Optional[dict[str, Any]],
+        config_signature: dict[str, Any],
+        *,
+        expected_pid: Optional[int] = None,
+    ) -> bool:
+        if not info:
+            return False
+        if info.get("protocol") != _SERVER_PROTOCOL:
+            return False
+        if info.get("backend_module_name") != self.backend_module_name:
+            return False
+        if info.get("model_name") != config_signature.get("model_name"):
+            return False
+        if info.get("passages_file") != config_signature.get("passages_file"):
+            return False
+        if info.get("embedding_mode") != config_signature.get("embedding_mode"):
+            return False
+        if info.get("distance_metric") != config_signature.get("distance_metric"):
+            return False
+        if expected_pid is not None and int(info.get("pid") or 0) != expected_pid:
+            return False
+        return True
 
     @classmethod
     def list_daemons(cls) -> list[dict[str, Any]]:

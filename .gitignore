@@ -93,6 +93,7 @@ wheels/
 test_indices*/
 test_*.py
 !tests/**
+!packages/leann-core/tests/test_*.py
 # Re-ignore common generated artifacts globally (especially after allowlist rules).
 **/.DS_Store
 **/__pycache__/
