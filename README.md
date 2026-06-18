@@ -1,4 +1,4 @@
-> **Custom fork** — branch `zain/custom-patches`. See `CLAUDE.md` for install instructions and patch notes.
+> **Zain's LEANN fork:** A personal-scale retrieval lab on top of `yichuan-w/LEANN`, focused on time-aware, metadata-aware local search for agent memory. This branch adds temporal query routing, multi-axis time filters, metadata-aware search controls, stored-vector prefiltering, and source registry plumbing while tracking upstream LEANN closely. See `CLAUDE.md` for install instructions and patch notes.
 
 <p align="center">
   <img src="assets/logo-text.png" alt="LEANN Logo" width="400">
