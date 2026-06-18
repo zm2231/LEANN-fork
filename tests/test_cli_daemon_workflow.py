@@ -6,6 +6,51 @@ from typing import Any
 from leann.cli import LeannCLI
 
 
+def test_search_parser_accepts_advanced_search_controls():
+    cli = LeannCLI()
+    parser = cli.create_parser()
+
+    args = parser.parse_args(
+        [
+            "search",
+            "demo",
+            "hybrid query",
+            "--vector-weight",
+            "0.35",
+            "--prefilter",
+            "always",
+            "--prefilter-threshold",
+            "0.2",
+            "--explain-filters",
+            "--diversify-by",
+            "source",
+            "--max-per-group",
+            "3",
+        ]
+    )
+
+    assert args.vector_weight == 0.35
+    assert args.prefilter == "always"
+    assert args.prefilter_threshold == 0.2
+    assert args.explain_filters is True
+    assert args.diversify_by == "source"
+    assert args.max_per_group == 3
+
+
+def test_search_parser_advanced_search_control_defaults():
+    cli = LeannCLI()
+    parser = cli.create_parser()
+
+    args = parser.parse_args(["search", "demo", "hybrid query"])
+
+    assert args.vector_weight == 1.0
+    assert args.prefilter == "auto"
+    assert args.prefilter_threshold == 0.05
+    assert args.explain_filters is False
+    assert args.diversify_by is None
+    assert args.max_per_group == 2
+
+
 def test_search_passes_daemon_flags_to_searcher(monkeypatch):
     cli = LeannCLI()
     monkeypatch.setattr(
@@ -41,6 +86,12 @@ def test_search_passes_daemon_flags_to_searcher(monkeypatch):
         use_daemon=True,
         daemon_ttl=222,
         enable_warmup=True,
+        vector_weight=0.35,
+        prefilter="always",
+        prefilter_threshold=0.2,
+        explain_filters=True,
+        diversify_by="source",
+        max_per_group=3,
     )
     asyncio.run(cli.search_documents(args))
 
@@ -48,6 +99,12 @@ def test_search_passes_daemon_flags_to_searcher(monkeypatch):
     assert captured["init"]["use_daemon"] is True
     assert captured["init"]["daemon_ttl_seconds"] == 222
     assert captured["search"]["recompute_embeddings"] is True
+    assert captured["search"]["vector_weight"] == 0.35
+    assert captured["search"]["prefilter"] == "always"
+    assert captured["search"]["prefilter_threshold"] == 0.2
+    assert captured["search"]["explain_filters"] is True
+    assert captured["search"]["diversify_by"] == "source"
+    assert captured["search"]["max_per_group"] == 3
 
 
 def test_search_allows_recompute_autodetect_when_flag_omitted(monkeypatch):

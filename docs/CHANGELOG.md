@@ -4,6 +4,8 @@
 
 ### Added
 
+- Exposed metadata-aware search controls on `leann search` and the `leann_search` MCP tool: `vector_weight`, `prefilter`, `prefilter_threshold`, `explain_filters`, `diversify_by`, and `max_per_group`. Updated LEANN agent skills to document CLI, MCP, and Python usage.
+
 - Adopted upstream PRs after evaluating the open queue against this fork:
   - `leann rebuild <index>` — re-run a build with the index's stored config (incremental delta by default, `--force` for full rebuild). (upstream #326)
   - Optional query log: set `LEANN_QUERY_LOG=<path>` and `LeannSearcher.search()` appends a JSONL record (query, top_k, result ids/scores, query embedding) per call, for offline benchmark replay. (upstream #325)

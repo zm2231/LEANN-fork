@@ -279,6 +279,42 @@ def handle_request(request):
                                     "type": "object",
                                     "description": "Optional LEANN metadata filters, e.g. {'source_type': {'==': 'slack'}}.",
                                 },
+                                "vector_weight": {
+                                    "type": "number",
+                                    "minimum": 0.0,
+                                    "maximum": 1.0,
+                                    "default": 1.0,
+                                    "description": "Hybrid weight: 1.0 pure vector, 0.0 pure BM25.",
+                                },
+                                "prefilter": {
+                                    "type": "string",
+                                    "enum": ["auto", "always", "never"],
+                                    "default": "auto",
+                                    "description": "Metadata prefilter routing mode.",
+                                },
+                                "prefilter_threshold": {
+                                    "type": "number",
+                                    "minimum": 0.0,
+                                    "maximum": 1.0,
+                                    "default": 0.05,
+                                    "description": "Selectivity threshold for prefilter='auto'.",
+                                },
+                                "explain_filters": {
+                                    "type": "boolean",
+                                    "default": False,
+                                    "description": "Include metadata filter routing diagnostics in JSON output.",
+                                },
+                                "diversify_by": {
+                                    "type": "string",
+                                    "description": "Metadata field used to cap results per group.",
+                                },
+                                "max_per_group": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 20,
+                                    "default": 2,
+                                    "description": "Maximum results per diversify_by group.",
+                                },
                             },
                             "required": ["index_name", "query"],
                         },
@@ -519,6 +555,21 @@ Examples:
                     }
                 if filters:
                     cmd.append(f"--metadata-filters={json.dumps(filters)}")
+                for src, flag, cast in (
+                    ("vector_weight", "--vector-weight", float),
+                    ("vectorWeight", "--vector-weight", float),
+                    ("prefilter", "--prefilter", str),
+                    ("prefilter_threshold", "--prefilter-threshold", float),
+                    ("prefilterThreshold", "--prefilter-threshold", float),
+                    ("diversify_by", "--diversify-by", str),
+                    ("diversifyBy", "--diversify-by", str),
+                    ("max_per_group", "--max-per-group", int),
+                    ("maxPerGroup", "--max-per-group", int),
+                ):
+                    if src in args:
+                        cmd.append(f"{flag}={cast(args[src])}")
+                if args.get("explain_filters", args.get("explainFilters", False)):
+                    cmd.append("--explain-filters")
                 result = subprocess.run(
                     cmd,
                     capture_output=True,

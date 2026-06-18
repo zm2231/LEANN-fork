@@ -621,6 +621,43 @@ Examples:
                 'Example: \'{"chapter": {"<=": 5}, "genre": {"==": "fiction"}}\''
             ),
         )
+        search_parser.add_argument(
+            "--vector-weight",
+            type=float,
+            default=1.0,
+            help=(
+                "Vector weight for hybrid search (0.0 = pure BM25, 1.0 = pure vector; default: 1.0)"
+            ),
+        )
+        search_parser.add_argument(
+            "--prefilter",
+            choices=["auto", "always", "never"],
+            default="auto",
+            help="Metadata prefilter routing mode (default: auto)",
+        )
+        search_parser.add_argument(
+            "--prefilter-threshold",
+            type=float,
+            default=0.05,
+            help="Selectivity threshold for --prefilter auto (default: 0.05)",
+        )
+        search_parser.add_argument(
+            "--explain-filters",
+            action="store_true",
+            help="Return metadata filter routing diagnostics with search results",
+        )
+        search_parser.add_argument(
+            "--diversify-by",
+            type=str,
+            default=None,
+            help="Metadata field used to cap results per group",
+        )
+        search_parser.add_argument(
+            "--max-per-group",
+            type=int,
+            default=2,
+            help="Maximum results per --diversify-by group (default: 2)",
+        )
 
         # Warmup command
         warmup_parser = subparsers.add_parser("warmup", help="Warm up an index embedding server")
@@ -3250,7 +3287,7 @@ Examples:
                 use_daemon=args.use_daemon,
                 daemon_ttl_seconds=args.daemon_ttl,
             )
-            results = searcher.search(
+            search_result = searcher.search(
                 query,
                 top_k=args.top_k,
                 complexity=args.complexity,
@@ -3260,7 +3297,18 @@ Examples:
                 pruning_strategy=args.pruning_strategy,
                 provider_options=provider_options if provider_options else None,
                 metadata_filters=metadata_filters,
+                prefilter=getattr(args, "prefilter", "auto"),
+                prefilter_threshold=getattr(args, "prefilter_threshold", 0.05),
+                explain_filters=getattr(args, "explain_filters", False),
+                diversify_by=getattr(args, "diversify_by", None),
+                max_per_group=getattr(args, "max_per_group", 2),
+                vector_weight=getattr(args, "vector_weight", 1.0),
             )
+            if isinstance(search_result, tuple):
+                results, diagnostics = search_result
+            else:
+                results = search_result
+                diagnostics = None
         finally:
             if saved_fd is not None:
                 sys.stdout.flush()
@@ -3277,7 +3325,16 @@ Examples:
                 }
                 for r in results
             ]
-            print(json.dumps(json_results, ensure_ascii=False, indent=2))
+            if diagnostics is not None:
+                print(
+                    json.dumps(
+                        {"results": json_results, "diagnostics": diagnostics},
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+            else:
+                print(json.dumps(json_results, ensure_ascii=False, indent=2))
             return
 
         print(f"Search results for '{query}' (top {len(results)}):")
@@ -3301,6 +3358,10 @@ Examples:
             print(f"   {result.text}")
             print(f"   Source: {result.metadata.get('source', '')}")
             print()
+
+        if diagnostics is not None:
+            print("Filter diagnostics:")
+            print(json.dumps(diagnostics, ensure_ascii=False, indent=2))
 
     async def warmup_index(self, args):
         index_path = self._resolve_index_path(

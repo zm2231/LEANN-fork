@@ -43,6 +43,16 @@ def test_tools_list_search_schema():
     assert "index_name" in schema["required"]
     assert "query" in schema["required"]
     assert "metadata_filters" in schema["properties"]
+    for prop in (
+        "vector_weight",
+        "prefilter",
+        "prefilter_threshold",
+        "explain_filters",
+        "diversify_by",
+        "max_per_group",
+    ):
+        assert prop in schema["properties"]
+        assert prop not in schema["required"]
 
 
 def test_tools_list_multi_search_schema():
@@ -133,6 +143,43 @@ def test_leann_search_uses_plural_metadata_filters(monkeypatch):
     cmd = calls[0][0]
     assert any(part.startswith("--metadata-filters=") for part in cmd)
     assert not any(part.startswith("--metadata-filter=") for part in cmd)
+
+
+def test_leann_search_forwards_advanced_search_controls(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr(mcp.subprocess, "run", fake_run)
+    req = {
+        "jsonrpc": "2.0",
+        "id": 61,
+        "method": "tools/call",
+        "params": {
+            "name": "leann_search",
+            "arguments": {
+                "index_name": "idx",
+                "query": "q",
+                "vector_weight": 0.4,
+                "prefilter": "always",
+                "prefilter_threshold": 0.2,
+                "explain_filters": True,
+                "diversify_by": "source",
+                "max_per_group": 3,
+            },
+        },
+    }
+    resp = handle_request(req)
+    assert resp["result"]["content"][0]["text"] == "[]"
+    cmd = calls[0][0]
+    assert "--vector-weight=0.4" in cmd
+    assert "--prefilter=always" in cmd
+    assert "--prefilter-threshold=0.2" in cmd
+    assert "--explain-filters" in cmd
+    assert "--diversify-by=source" in cmd
+    assert "--max-per-group=3" in cmd
 
 
 def test_search_sessions_uses_plural_metadata_filters(monkeypatch):
