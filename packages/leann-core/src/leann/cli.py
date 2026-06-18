@@ -506,6 +506,129 @@ Examples:
             help="Fall back to traditional chunking if AST chunking fails (default: True)",
         )
 
+        # Build from JSONL command
+        jsonl_parser = subparsers.add_parser(
+            "build-jsonl",
+            help="Build index from JSONL rows with explicit text and metadata fields",
+        )
+        jsonl_parser.add_argument("index_name", help="Index name")
+        jsonl_parser.add_argument(
+            "--input",
+            required=True,
+            help="JSONL input file. Each line must be a JSON object.",
+        )
+        jsonl_parser.add_argument(
+            "--text-field",
+            default="text",
+            help="Field containing searchable text (default: text)",
+        )
+        jsonl_parser.add_argument(
+            "--metadata-field",
+            default="metadata",
+            help="Field containing metadata object to preserve (default: metadata)",
+        )
+        jsonl_parser.add_argument(
+            "--id-field",
+            default="id",
+            help="Optional field containing stable passage id (default: id)",
+        )
+        jsonl_parser.add_argument(
+            "--backend-name",
+            type=str,
+            default="hnsw",
+            choices=["hnsw", "diskann", "ivf"],
+            help="Backend to use (default: hnsw)",
+        )
+        jsonl_parser.add_argument(
+            "--embedding-model",
+            type=str,
+            default="facebook/contriever",
+            help="Embedding model (default: facebook/contriever)",
+        )
+        jsonl_parser.add_argument(
+            "--embedding-mode",
+            type=str,
+            default="sentence-transformers",
+            choices=["sentence-transformers", "openai", "mlx", "ollama"],
+            help="Embedding backend mode (default: sentence-transformers)",
+        )
+        jsonl_parser.add_argument(
+            "--embedding-host",
+            type=str,
+            default=None,
+            help="Override Ollama-compatible embedding host",
+        )
+        jsonl_parser.add_argument(
+            "--embedding-api-base",
+            type=str,
+            default=None,
+            help="Base URL for OpenAI-compatible embedding services",
+        )
+        jsonl_parser.add_argument(
+            "--embedding-api-key",
+            type=str,
+            default=None,
+            help="API key for embedding service (defaults to OPENAI_API_KEY)",
+        )
+        jsonl_parser.add_argument(
+            "--embedding-prompt-template",
+            type=str,
+            default=None,
+            help="Prompt template to prepend to all texts for embedding",
+        )
+        jsonl_parser.add_argument(
+            "--query-prompt-template",
+            type=str,
+            default=None,
+            help="Prompt template for queries",
+        )
+        jsonl_parser.add_argument(
+            "--force",
+            "-f",
+            action="store_true",
+            help="Force full rebuild of existing index",
+        )
+        jsonl_parser.add_argument(
+            "--build-preset",
+            type=str,
+            default=None,
+            help=(
+                "Apply a named preset from ~/.leann/build_defaults.json or LEANN_BUILD_DEFAULTS. "
+                "Defaults only affect new/manual builds; rebuild replays the index build_config."
+            ),
+        )
+        jsonl_parser.add_argument(
+            "--graph-degree", type=int, default=32, help="Graph degree (default: 32)"
+        )
+        jsonl_parser.add_argument(
+            "--complexity", type=int, default=64, help="Build complexity (default: 64)"
+        )
+        jsonl_parser.add_argument("--num-threads", type=int, default=1)
+        jsonl_parser.add_argument(
+            "--compact",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help="Use compact (CSR) graph storage. Compact indices are read-only and cannot be updated incrementally. Default: false.",
+        )
+        jsonl_parser.add_argument(
+            "--recompute",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="Enable recomputation (default: true)",
+        )
+        jsonl_parser.set_defaults(
+            file_types=None,
+            include_hidden=False,
+            doc_chunk_size=256,
+            doc_chunk_overlap=128,
+            code_chunk_size=512,
+            code_chunk_overlap=50,
+            use_ast_chunking=False,
+            ast_chunk_size=300,
+            ast_chunk_overlap=64,
+            ast_fallback_traditional=True,
+        )
+
         # Watch command
         watch_parser = subparsers.add_parser(
             "watch",
@@ -2520,8 +2643,24 @@ Examples:
     def _make_build_config(self, args, docs_paths: list[str]) -> dict[str, Any]:
         config = {
             "version": BUILD_CONFIG_VERSION,
+            "source_kind": "docs",
             "index_name": args.index_name,
             "docs": [str(Path(p).expanduser().resolve()) for p in docs_paths],
+            "build_preset": getattr(args, "build_preset", None),
+        }
+        for key in BUILD_CONFIG_FIELDS:
+            config[key] = getattr(args, key)
+        return config
+
+    def _make_jsonl_build_config(self, args) -> dict[str, Any]:
+        config = {
+            "version": BUILD_CONFIG_VERSION,
+            "source_kind": "jsonl",
+            "index_name": args.index_name,
+            "input": str(Path(args.input).expanduser().resolve()),
+            "text_field": args.text_field,
+            "metadata_field": args.metadata_field,
+            "id_field": args.id_field,
             "build_preset": getattr(args, "build_preset", None),
         }
         for key in BUILD_CONFIG_FIELDS:
@@ -2540,6 +2679,67 @@ Examples:
                 json.dump(meta, f, indent=2)
         except Exception as exc:
             print(f"Warning: Could not persist build_config to {meta_path}: {exc}")
+
+    def _write_jsonl_build_config(self, index_dir: Path, args) -> None:
+        meta_path = index_dir / "documents.leann.meta.json"
+        if not meta_path.exists():
+            return
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            meta["build_config"] = self._make_jsonl_build_config(args)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, indent=2)
+        except Exception as exc:
+            print(f"Warning: Could not persist build_config to {meta_path}: {exc}")
+
+    def _load_jsonl_rows(self, args) -> list[dict[str, Any]]:
+        input_path = Path(args.input).expanduser()
+        if not input_path.exists():
+            raise FileNotFoundError(f"JSONL input not found: {input_path}")
+        if not input_path.is_file():
+            raise ValueError(f"JSONL input must be a file: {input_path}")
+
+        rows: list[dict[str, Any]] = []
+        with open(input_path, encoding="utf-8") as f:
+            for line_no, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"{input_path}:{line_no}: invalid JSON: {exc}") from exc
+                if not isinstance(raw, dict):
+                    raise ValueError(f"{input_path}:{line_no}: row must be a JSON object")
+
+                text = raw.get(args.text_field)
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError(
+                        f"{input_path}:{line_no}: field '{args.text_field}' must be non-empty text"
+                    )
+
+                metadata_value = raw.get(args.metadata_field, {})
+                if metadata_value is None:
+                    metadata: dict[str, Any] = {}
+                elif isinstance(metadata_value, dict):
+                    metadata = dict(metadata_value)
+                else:
+                    raise ValueError(
+                        f"{input_path}:{line_no}: field '{args.metadata_field}' must be an object"
+                    )
+
+                row_id = raw.get(args.id_field) if args.id_field else None
+                if row_id not in (None, ""):
+                    row_id = str(row_id)
+                    metadata.setdefault("id", row_id)
+                    metadata.setdefault("source_document_id", row_id)
+
+                rows.append({"id": metadata.get("id"), "text": text, "metadata": metadata})
+
+        if not rows:
+            raise ValueError(f"No rows found in JSONL input: {input_path}")
+        return rows
 
     def _load_sync_roots(self, index_dir: Path) -> list[str]:
         """Load sync roots from index dir (for path resolution in incremental updates)."""
@@ -2626,11 +2826,41 @@ Examples:
     def _args_from_build_config(
         self, index_name: str, build_config: dict[str, Any], *, force: bool = False
     ) -> Optional[list[str]]:
+        source_kind = build_config.get("source_kind", "docs")
+        if source_kind == "jsonl":
+            input_path = build_config.get("input")
+            if not input_path:
+                return None
+            build_args_list = [
+                "build-jsonl",
+                index_name,
+                "--input",
+                str(input_path),
+                "--text-field",
+                str(build_config.get("text_field", "text")),
+                "--metadata-field",
+                str(build_config.get("metadata_field", "metadata")),
+            ]
+            id_field = build_config.get("id_field")
+            if id_field is not None:
+                build_args_list.extend(["--id-field", str(id_field)])
+            self._append_build_config_options(build_args_list, build_config)
+            if force:
+                build_args_list.append("--force")
+            return build_args_list
+
         docs = build_config.get("docs") or build_config.get("roots")
         if not docs:
             return None
         build_args_list = ["build", index_name, "--docs", *[str(p) for p in docs]]
+        self._append_build_config_options(build_args_list, build_config)
+        if force:
+            build_args_list.append("--force")
+        return build_args_list
 
+    def _append_build_config_options(
+        self, build_args_list: list[str], build_config: dict[str, Any]
+    ) -> None:
         def add_value(key: str) -> None:
             value = build_config.get(key)
             if value is not None:
@@ -2671,9 +2901,6 @@ Examples:
                 if build_config["ast_fallback_traditional"]
                 else "--no-ast-fallback-traditional"
             )
-        if force:
-            build_args_list.append("--force")
-        return build_args_list
 
     async def build_index(self, args):
         self._apply_build_defaults(args)
@@ -2952,6 +3179,121 @@ Examples:
         print(f"Index built at {index_path}")
         self.register_project_dir()
 
+    async def build_jsonl_index(self, args):
+        self._apply_build_defaults(args)
+        index_name = args.index_name
+        index_dir = self.indexes_dir / index_name
+        index_path = self.get_index_path(index_name)
+        input_path = Path(args.input).expanduser().resolve()
+
+        try:
+            rows = self._load_jsonl_rows(args)
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Error: {exc}")
+            return
+
+        index_dir.mkdir(parents=True, exist_ok=True)
+        synchronizers = self._create_synchronizers(
+            index_dir,
+            [str(input_path.parent)],
+            include_extensions=[input_path.suffix] if input_path.suffix else None,
+        )
+        changed = True
+        if index_dir.exists() and not args.force and synchronizers:
+            new_paths, removed_paths, modified_paths = self._detect_build_changes(synchronizers)
+            input_keys = {str(input_path), input_path.name}
+            input_changed = bool({str(p) for p in new_paths | removed_paths | modified_paths} & input_keys)
+            changed = input_changed
+
+            meta_path = index_dir / "documents.leann.meta.json"
+            if meta_path.exists():
+                try:
+                    with open(meta_path, encoding="utf-8") as f:
+                        meta = json.load(f)
+                    current_build_config = self._make_jsonl_build_config(args)
+                    stored_build_config = meta.get("build_config")
+                    if stored_build_config == current_build_config and not changed:
+                        print("Index up to date.")
+                        return
+                    if stored_build_config != current_build_config and not changed:
+                        print(
+                            "Index up to date, but build settings differ from stored "
+                            "build_config. Use --force to rebuild with new settings."
+                        )
+                        return
+
+                    backend_name = meta.get("backend_name")
+                    is_compact = meta.get(
+                        "is_compact", meta.get("backend_kwargs", {}).get("is_compact", True)
+                    )
+                    same_embedding = (
+                        meta.get("embedding_model") == args.embedding_model
+                        and meta.get("embedding_mode") == args.embedding_mode
+                    )
+                    can_ivf_update = backend_name == "ivf" and not is_compact and same_embedding
+                    if can_ivf_update and changed:
+                        offset_file = index_dir / "documents.leann.passages.idx"
+                        ids_to_remove: list[str] = []
+                        if offset_file.exists():
+                            with open(offset_file, "rb") as f:
+                                ids_to_remove = [str(pid) for pid in pickle.load(f).keys()]
+                        builder = self._make_incremental_builder(args)
+                        indexed_at = datetime.now(timezone.utc).isoformat()
+                        for row in rows:
+                            metadata = dict(row["metadata"])
+                            metadata.setdefault("indexed_at", indexed_at)
+                            builder.add_text(row["text"], metadata=metadata)
+                        print(
+                            f"Incremental JSONL IVF update: replacing {len(ids_to_remove)} old row(s) with {len(rows)} current row(s)..."
+                        )
+                        builder.update_index(
+                            index_path, remove_passage_ids=ids_to_remove if ids_to_remove else None
+                        )
+                        self._commit_synchronizers(synchronizers)
+                        self._write_sync_config(
+                            index_dir,
+                            [str(input_path.parent)],
+                            [input_path.suffix] if input_path.suffix else None,
+                            None,
+                        )
+                        self._write_jsonl_build_config(index_dir, args)
+                        self.register_project_dir()
+                        print(f"Index updated at {index_path}")
+                        return
+                except Exception as exc:
+                    print(f"Warning: Could not apply incremental JSONL update: {exc}")
+
+        print(f"Building JSONL index '{index_name}' with {args.backend_name} backend...")
+        builder = LeannBuilder(
+            backend_name=args.backend_name,
+            embedding_model=args.embedding_model,
+            embedding_mode=args.embedding_mode,
+            embedding_options=self._build_embedding_options(args) or None,
+            graph_degree=args.graph_degree,
+            complexity=args.complexity,
+            is_compact=args.compact,
+            is_recompute=args.recompute,
+            num_threads=args.num_threads,
+        )
+        indexed_at = datetime.now(timezone.utc).isoformat()
+        for row in rows:
+            metadata = dict(row["metadata"])
+            metadata.setdefault("indexed_at", indexed_at)
+            builder.add_text(row["text"], metadata=metadata)
+
+        builder.build_index(index_path)
+        for fs in synchronizers:
+            fs.create_snapshot()
+        self._write_sync_config(
+            index_dir,
+            [str(input_path.parent)],
+            [input_path.suffix] if input_path.suffix else None,
+            None,
+        )
+        self._write_jsonl_build_config(index_dir, args)
+        print(f"Index built at {index_path}")
+        self.register_project_dir()
+
     def _watch_check_changes(self, index_name: str) -> tuple[set[str], set[str], set[str]]:
         """Check for file changes using the same snapshots as build (index_dir)."""
         resolved = self._resolve_index_for_watch(index_name)
@@ -3102,7 +3444,10 @@ Examples:
         parser = self.create_parser()
         build_args = parser.parse_args(build_args_list)
         build_args._from_rebuild = True
-        await self.build_index(build_args)
+        if build_args.command == "build-jsonl":
+            await self.build_jsonl_index(build_args)
+        else:
+            await self.build_index(build_args)
 
     async def _watch_trigger_build(self, index_name: str) -> None:
         """Trigger an idempotent build for the given index, reusing its stored config."""
@@ -3112,7 +3457,10 @@ Examples:
         parser = self.create_parser()
         build_args = parser.parse_args(build_args_list)
         build_args._from_rebuild = True
-        await self.build_index(build_args)
+        if build_args.command == "build-jsonl":
+            await self.build_jsonl_index(build_args)
+        else:
+            await self.build_index(build_args)
 
     async def watch_index(self, args):
         index_name = args.index_name
@@ -3821,6 +4169,9 @@ Examples:
         elif args.command == "build":
             with suppress_cpp_output(suppress):
                 await self.build_index(args)
+        elif args.command == "build-jsonl":
+            with suppress_cpp_output(suppress):
+                await self.build_jsonl_index(args)
         elif args.command == "watch":
             await self.watch_index(args)
         elif args.command == "rebuild":

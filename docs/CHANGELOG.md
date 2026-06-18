@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `leann build-jsonl` for metadata-rich, already-chunked inputs. It preserves arbitrary row metadata via `LeannBuilder.add_text()`, records JSONL field settings in `build_config`, and lets `leann rebuild <index>` replay JSONL builds without a Python helper.
+
 - Exposed metadata-aware search controls on `leann search` and the `leann_search` MCP tool: `vector_weight`, `prefilter`, `prefilter_threshold`, `explain_filters`, `diversify_by`, and `max_per_group`. Updated LEANN agent skills to document CLI, MCP, and Python usage.
 
 - Adopted upstream PRs after evaluating the open queue against this fork:

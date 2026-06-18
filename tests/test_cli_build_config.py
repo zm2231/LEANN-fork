@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pickle
 from pathlib import Path
 
 
@@ -82,6 +83,63 @@ def test_reconstruct_prefers_persisted_build_config(monkeypatch, tmp_path):
     assert "--include-hidden" in args
     assert "--use-ast-chunking" in args
     assert "--no-ast-fallback-traditional" in args
+    assert "--force" in args
+
+
+def test_reconstruct_jsonl_build_config(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    input_path = tmp_path / "tools.jsonl"
+    input_path.write_text("", encoding="utf-8")
+
+    _write_index_meta(
+        cli,
+        "tools",
+        {
+            "backend_name": "ivf",
+            "embedding_model": "BAAI/bge-m3",
+            "embedding_mode": "openai",
+            "backend_kwargs": {"is_compact": False, "is_recompute": False},
+            "build_config": {
+                "version": 1,
+                "source_kind": "jsonl",
+                "input": str(input_path),
+                "text_field": "body",
+                "metadata_field": "meta",
+                "id_field": "tool_id",
+                "backend_name": "ivf",
+                "embedding_model": "BAAI/bge-m3",
+                "embedding_mode": "openai",
+                "embedding_api_base": "http://127.0.0.1:8100/v1",
+                "embedding_api_key": "iq-local",
+                "graph_degree": 32,
+                "complexity": 64,
+                "num_threads": 1,
+                "compact": False,
+                "recompute": False,
+                "file_types": None,
+                "include_hidden": False,
+                "doc_chunk_size": 256,
+                "doc_chunk_overlap": 128,
+                "code_chunk_size": 512,
+                "code_chunk_overlap": 50,
+                "use_ast_chunking": False,
+                "ast_chunk_size": 300,
+                "ast_chunk_overlap": 64,
+                "ast_fallback_traditional": True,
+            },
+        },
+    )
+
+    args = cli._reconstruct_build_args("tools", force=True, verbose=True)
+
+    assert args is not None
+    assert args[0:4] == ["build-jsonl", "tools", "--input", str(input_path)]
+    assert args[args.index("--text-field") + 1] == "body"
+    assert args[args.index("--metadata-field") + 1] == "meta"
+    assert args[args.index("--id-field") + 1] == "tool_id"
+    assert "--backend-name" in args
+    assert args[args.index("--backend-name") + 1] == "ivf"
+    assert "--no-recompute" in args
     assert "--force" in args
 
 
@@ -243,6 +301,133 @@ def test_write_build_config_persists_full_build_settings(monkeypatch, tmp_path):
     assert build_config["doc_chunk_size"] == 384
     assert build_config["doc_chunk_overlap"] == 96
     assert build_config["use_ast_chunking"] is True
+
+
+def test_load_jsonl_rows_preserves_arbitrary_metadata(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    input_path = tmp_path / "tools.jsonl"
+    input_path.write_text(
+        json.dumps(
+            {
+                "id": "workon",
+                "text": "workon switch project repo context",
+                "metadata": {
+                    "name": "workon",
+                    "group": "project",
+                    "tier": "hot",
+                    "autoRunnable": False,
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parser = cli.create_parser()
+    args = parser.parse_args(["build-jsonl", "tools", "--input", str(input_path)])
+
+    rows = cli._load_jsonl_rows(args)
+
+    assert rows == [
+        {
+            "id": "workon",
+            "text": "workon switch project repo context",
+            "metadata": {
+                "id": "workon",
+                "source_document_id": "workon",
+                "name": "workon",
+                "group": "project",
+                "tier": "hot",
+                "autoRunnable": False,
+            },
+        }
+    ]
+
+
+def test_build_jsonl_persists_metadata_and_build_config(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    input_path = tmp_path / "tools.jsonl"
+    input_path.write_text(
+        json.dumps(
+            {
+                "id": "workon",
+                "text": "workon switch project repo context",
+                "metadata": {"name": "workon", "group": "project", "tier": "hot"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeBuilder:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chunks = []
+
+        def add_text(self, text, metadata=None):
+            metadata = dict(metadata or {})
+            self.chunks.append({"id": metadata.get("id", str(len(self.chunks))), "text": text, "metadata": metadata})
+
+        def build_index(self, index_path):
+            index_path = Path(index_path)
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            (index_path.parent / f"{index_path.name}.meta.json").write_text(
+                json.dumps(
+                    {
+                        "backend_name": self.kwargs["backend_name"],
+                        "embedding_model": self.kwargs["embedding_model"],
+                        "embedding_mode": self.kwargs["embedding_mode"],
+                        "backend_kwargs": {
+                            "is_compact": self.kwargs["is_compact"],
+                            "is_recompute": self.kwargs["is_recompute"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with open(index_path.parent / f"{index_path.name}.passages.jsonl", "w", encoding="utf-8") as f:
+                offsets = {}
+                for chunk in self.chunks:
+                    offsets[chunk["id"]] = f.tell()
+                    f.write(json.dumps(chunk) + "\n")
+            with open(index_path.parent / f"{index_path.name}.passages.idx", "wb") as f:
+                pickle.dump(offsets, f)
+
+    import leann.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "LeannBuilder", FakeBuilder)
+    parser = cli.create_parser()
+    args = parser.parse_args(
+        [
+            "build-jsonl",
+            "tools",
+            "--input",
+            str(input_path),
+            "--backend-name",
+            "ivf",
+            "--no-recompute",
+        ]
+    )
+
+    asyncio.run(cli.build_jsonl_index(args))
+
+    index_dir = cli.indexes_dir / "tools"
+    passage = json.loads((index_dir / "documents.leann.passages.jsonl").read_text().splitlines()[0])
+    assert passage["metadata"]["name"] == "workon"
+    assert passage["metadata"]["group"] == "project"
+    assert passage["metadata"]["tier"] == "hot"
+    assert passage["metadata"]["id"] == "workon"
+    assert passage["metadata"]["source_document_id"] == "workon"
+    assert "indexed_at" in passage["metadata"]
+
+    meta = json.loads((index_dir / "documents.leann.meta.json").read_text())
+    build_config = meta["build_config"]
+    assert build_config["source_kind"] == "jsonl"
+    assert build_config["input"] == str(input_path.resolve())
+    assert build_config["text_field"] == "text"
+    assert build_config["metadata_field"] == "metadata"
+    assert build_config["id_field"] == "id"
+    assert build_config["backend_name"] == "ivf"
+    assert build_config["recompute"] is False
 
 
 def test_unchanged_legacy_index_records_matching_build_config(monkeypatch, tmp_path):

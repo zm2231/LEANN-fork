@@ -174,6 +174,26 @@ leann build cadence-fast --docs ./notes --build-preset meetings
 
 Each completed `leann build` persists its resolved `build_config` into the index metadata. `leann rebuild <index>` and `leann watch <index>` replay that stored index config instead of reading your current machine defaults, so changing your global default embedding model later does not silently mutate old indexes.
 
+For metadata-rich rows that are already chunked, use `leann build-jsonl` instead of writing markdown files and passing `--docs`. The document loader preserves reader/file metadata, but JSONL is the first-class path when fields like `name`, `group`, `tier`, or `autoRunnable` must survive indexing exactly.
+
+```bash
+leann build-jsonl code-mode-tools \
+  --input .pi/code-mode-leann/tools.jsonl \
+  --text-field text \
+  --metadata-field metadata \
+  --id-field id \
+  --backend-name ivf \
+  --no-recompute
+```
+
+Each JSONL line must be an object:
+
+```json
+{"id":"workon","text":"workon switch project repo context","metadata":{"name":"workon","group":"project","tier":"hot","autoRunnable":false}}
+```
+
+`build-jsonl` records `source_kind=jsonl`, the input file, and field names in `build_config`, so `leann rebuild code-mode-tools` replays the same metadata-aware build. IVF non-compact indexes can replace changed JSONL rows incrementally; other changed JSONL indexes rebuild from scratch.
+
 ### Python API Usage
 
 You can pass the same configuration from Python:

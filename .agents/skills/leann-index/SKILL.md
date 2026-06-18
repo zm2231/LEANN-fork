@@ -12,10 +12,11 @@ LEANN is a vector DB with graph-based selective recomputation. Index data lives 
 - Fallback for hermetic unit tests only: `sentence-transformers/all-MiniLM-L6-v2`.
 - Backend: HNSW (default). Don't touch DiskANN/IVF unless explicitly asked — they're pre-existing surfaces, not part of Wave 1/2.
 
-## Two entry points
+## Three entry points
 
 1. **`leann build <name> --docs <paths>`** — generic builder from filesystem.
-2. **`leann index-<source>`** — specialized reader (browser, email, calendar, imessage, wechat, chatgpt, claude).
+2. **`leann build-jsonl <name> --input rows.jsonl`** — exact metadata builder for already-chunked rows.
+3. **`leann index-<source>`** — specialized reader (browser, email, calendar, imessage, wechat, chatgpt, claude).
 
 ## Default invocation (use this unless told otherwise)
 
@@ -42,6 +43,30 @@ leann build my-code --docs ./src --use-ast-chunking \
 
 Requires `pip install astchunk` in the venv. Falls back to traditional chunking silently if missing — verify by reading `meta.json` after build. Languages supported by astchunk: Python, Java, C#, TS/TSX/JS.
 
+## JSONL / tool-doc indexes
+
+Use `build-jsonl` when the caller already has one row per searchable object and needs exact metadata preserved for filtering/routing. This is the right path for code-mode tool indexes; `leann build --docs ...` preserves reader/file metadata, but markdown files do not carry arbitrary tool fields like `group`, `tier`, or `autoRunnable`.
+
+```jsonl
+{"id":"workon","text":"workon switch project repo context","metadata":{"name":"workon","group":"project","tier":"hot","autoRunnable":false}}
+```
+
+```bash
+leann build-jsonl code-mode-tools \
+  --input .pi/code-mode-leann/tools.jsonl \
+  --text-field text \
+  --metadata-field metadata \
+  --id-field id \
+  --backend-name ivf \
+  --no-recompute \
+  --embedding-mode openai \
+  --embedding-model BAAI/bge-m3 \
+  --embedding-api-base http://100.122.112.83:8100/v1 \
+  --embedding-api-key iq-local
+```
+
+`build-jsonl` persists `source_kind=jsonl`, `input`, `text_field`, `metadata_field`, and `id_field` into `build_config`, so `leann rebuild code-mode-tools` replays the same JSONL build. IVF non-compact indexes can replace changed JSONL rows incrementally; other changed JSONL indexes fall back to a full rebuild.
+
 ## Force full rebuild
 
 By default `leann build` is **incremental** — adds new files only. To rebuild from scratch:
@@ -52,7 +77,7 @@ leann build my-docs --docs ./documents --force
 
 ## Rebuild with stored config
 
-`leann rebuild <name>` re-runs a build using the config stored with the index (docs paths, embedding flags, chunking) — no need to re-type the original flags. Incremental delta by default; `--force` for a full rebuild from scratch (upstream #326).
+`leann rebuild <name>` re-runs a build using the config stored with the index (docs paths or JSONL input, embedding flags, chunking/field settings) — no need to re-type the original flags. Incremental delta by default; `--force` for a full rebuild from scratch (upstream #326).
 
 ```bash
 leann rebuild my-docs            # incremental, reusing stored config
@@ -116,6 +141,15 @@ leann remove my-docs       # local first, then global
 - `--docs PATH [PATH …]` — files or directories
 - `--file-types ext,ext` — comma-separated extensions filter
 - `--include-hidden` / `--no-include-hidden` — dotfiles (default off)
+
+## `leann build-jsonl` flags
+
+- `index_name`
+- `--input FILE.jsonl` — required JSONL source
+- `--text-field FIELD` — searchable text field (default `text`)
+- `--metadata-field FIELD` — metadata object field (default `metadata`)
+- `--id-field FIELD` — stable passage ID field (default `id`)
+- plus the same backend and embedding flags as `leann build`
 
 ### Embeddings (override defaults above)
 - `--embedding-mode {sentence-transformers,openai,mlx,ollama}` — `openai` for iq
