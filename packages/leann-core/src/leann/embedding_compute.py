@@ -907,11 +907,13 @@ def compute_embeddings_openai(
     if not resolved_api_key:
         raise RuntimeError("OPENAI_API_KEY environment variable not set")
 
+    openai_timeout = float(os.environ.get("LEANN_OPENAI_TIMEOUT", "600"))
+
     # Create OpenAI client
     client = openai.OpenAI(
         api_key=resolved_api_key,
         base_url=resolved_base_url,
-        timeout=float(os.environ.get("LEANN_OPENAI_TIMEOUT", "600")),
+        timeout=openai_timeout,
     )
 
     logger.info(
@@ -934,8 +936,9 @@ def compute_embeddings_openai(
     # OpenAI has limits on batch size and input length
     max_batch_size = 800  # Conservative batch size because the token limit is 300K
     all_embeddings = []
+    text_lengths = [len(text) for text in texts]
     # get the avg len of texts
-    avg_len = sum(len(text) for text in texts) / len(texts)
+    avg_len = sum(text_lengths) / len(texts)
     # if avg len is less than 1000, use the max batch size
     if avg_len > 300:
         max_batch_size = 500
@@ -980,10 +983,23 @@ def compute_embeddings_openai(
 
     # if avg len is less than 1000, use the max batch size
 
+    total_batches = (len(texts) + max_batch_size - 1) // max_batch_size
+    logger.warning(
+        "OpenAI embedding config: model=%s base_url=%s texts=%d batch_size=%d "
+        "timeout_s=%.1f total_chars=%d avg_chars=%.1f max_chars=%d",
+        model_name,
+        resolved_base_url,
+        len(texts),
+        max_batch_size,
+        openai_timeout,
+        sum(text_lengths),
+        avg_len,
+        max(text_lengths) if text_lengths else 0,
+    )
+
     try:
         from tqdm import tqdm
 
-        total_batches = (len(texts) + max_batch_size - 1) // max_batch_size
         batch_range = range(0, len(texts), max_batch_size)
         batch_iterator = tqdm(
             batch_range, desc="Computing embeddings", unit="batch", total=total_batches
@@ -994,10 +1010,14 @@ def compute_embeddings_openai(
 
     for i in batch_iterator:
         batch_texts = texts[i : i + max_batch_size]
+        batch_lengths = text_lengths[i : i + max_batch_size]
+        batch_number = (i // max_batch_size) + 1
+        batch_started = time.time()
 
         try:
             response = client.embeddings.create(model=model_name, input=batch_texts)
             batch_embeddings = [embedding.embedding for embedding in response.data]
+            elapsed = time.time() - batch_started
 
             # Verify we got the expected number of embeddings
             if len(batch_embeddings) != len(batch_texts):
@@ -1007,8 +1027,32 @@ def compute_embeddings_openai(
 
             # Only take the number of embeddings that match the batch size
             all_embeddings.extend(batch_embeddings[: len(batch_texts)])
+            logger.warning(
+                "OpenAI embedding batch %d/%d ok: offset=%d size=%d elapsed_s=%.2f "
+                "total_chars=%d avg_chars=%.1f max_chars=%d",
+                batch_number,
+                total_batches,
+                i,
+                len(batch_texts),
+                elapsed,
+                sum(batch_lengths),
+                (sum(batch_lengths) / len(batch_lengths)) if batch_lengths else 0.0,
+                max(batch_lengths) if batch_lengths else 0,
+            )
         except Exception as e:
-            logger.error(f"Batch {i} failed: {e}")
+            elapsed = time.time() - batch_started
+            logger.error(
+                "OpenAI embedding batch %d/%d failed: offset=%d size=%d elapsed_s=%.2f "
+                "total_chars=%d max_chars=%d error=%r",
+                batch_number,
+                total_batches,
+                i,
+                len(batch_texts),
+                elapsed,
+                sum(batch_lengths),
+                max(batch_lengths) if batch_lengths else 0,
+                e,
+            )
             raise
 
     embeddings = np.array(all_embeddings, dtype=np.float32)
