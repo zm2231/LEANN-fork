@@ -29,7 +29,8 @@ All opt-in, all composable in a single `search()` call:
 - **Facets** — `s.facets([...])` returns corpus value counts for filter authoring.
 - **Explain** — `explain_filters=True` returns `(results, diagnostics)` with selectivity + routing.
 - **Query log** — `LEANN_QUERY_LOG=<path>` appends a JSONL record per search for replay.
-- **Bulk search** — `s.multi_search([q1, q2, …], top_k=…)` embeds all queries in ONE backend call, then runs each through the normal `search()` path with its precomputed embedding. For `--no-recompute` bulk/eval workloads this pays the per-query embedding round-trip once instead of N times (~4–5× warm on 8–10 queries; batched embeddings are numerically identical to single-query). Accepts every `search()` kwarg. Transparently falls back to per-query `search()` when batching can't help or wouldn't match — recompute mode, `enable_temporal=True` (strips time tokens before embedding), `use_grep`, or pure-BM25 (`vector_weight=0.0`) — so it's always safe to call.
+- **Bulk search** — `s.multi_search([q1, q2, …], top_k=…)` embeds all queries in ONE backend call, then runs each through the normal `search()` path with `query_embedding=`. For `--no-recompute` bulk/eval workloads this pays the per-query embedding round-trip once instead of N times (~4–5× warm on 8–10 queries; batched embeddings are numerically identical to single-query). Accepts every `search()` kwarg. Transparently falls back to per-query `search()` when batching can't help or wouldn't match — recompute mode, `enable_temporal=True` (strips time tokens before embedding), `use_grep`, or pure-BM25 (`vector_weight=0.0`) — so it's always safe to call.
+- **Flat backend search** — exact cosine/IP/L2 scan over stored vectors. Prefer it for small/medium indexes you edit in place (markdown wikis, CRM/tool-doc corpora) when `--no-recompute` and exact recall matter more than graph compression. Not JSONL-only: flat indexes built from `--docs` directories search identically.
 
 ## `leann search` — fast retrieval
 
@@ -57,7 +58,7 @@ leann search my-docs "OrderHandler timeout" \
 - `--top-k N` — default 5
 - `--complexity N` — search complexity (default 64)
 - `--vector-weight FLOAT` — hybrid weight (`1.0` pure vector, `0.0` pure BM25/exact)
-- `--recompute` / `--no-recompute` — must match how index was built
+- `--recompute` / `--no-recompute` — override auto-detected `meta.json` behavior only when debugging
 - `--json` — machine-readable
 - `--non-interactive` — skip prompts
 - `--show-metadata` — display source paths / metadata
@@ -71,6 +72,8 @@ leann search my-docs "OrderHandler timeout" \
 - `--daemon-ttl N` — daemon idle TTL seconds
 - `--embedding-prompt-template "query: "` — for asymmetric models
 
+CLI note: `leann search` exposes the production retrieval flags above. Python-only controls today include `context_window`, `batch_size`, `use_grep`, `enable_temporal`, `temporal_*`, and `query_embedding`; use `LeannSearcher.search()` or MCP tools for those.
+
 ## MCP tools
 
 `leann_search` mirrors the `leann search` CLI. Required MCP args are only
@@ -81,9 +84,18 @@ leann search my-docs "OrderHandler timeout" \
 controls (`vectorWeight`, `prefilterThreshold`, `diversifyBy`,
 `maxPerGroup`, `explainFilters`) when tool callers emit them.
 
-`leann_multi_search` is the batched/RRF tool. Use `search_mode="code"` for
-codebase lookup, `search_mode="exact"` for pure BM25 (`vector_weight=0.0`),
-or pass `vector_weight` explicitly for hybrid routing.
+`leann_multi_search` is the batched/RRF tool. Use `search_mode="prose"` for
+chat/meeting/note recall (`vector_weight=0.3`), `search_mode="code"` for
+codebase lookup (`vector_weight=1.0`), `search_mode="exact"` for pure BM25
+(`vector_weight=0.0`), or `search_mode="filtered"` when metadata filters need
+a larger candidate pool. It accepts `extra_queries` for paraphrases, `fetch`
+for per-query candidate count, `limit` for final fused count, and
+`context_window`/`contextWindow` for sibling chunks. Skip paraphrases for exact
+names, dates, IDs, or quoted phrases.
+
+MCP exposes more than the CLI for agent use: sibling context (`context_window` /
+`contextWindow`) and batched/paraphrased multi-search are MCP/Python surfaces,
+not `leann search` flags.
 
 ### Metadata filter JSON
 
@@ -179,6 +191,8 @@ s.search(
 
     # — hybrid + misc —
     vector_weight=1.0,                    # 1.0 = pure vector, 0.0 = pure BM25 (`gemma=` is a deprecated alias)
+    provider_options=None,
+    query_embedding=None,                 # precomputed query vector; used by multi_search batching
     batch_size=0,
     use_grep=False,
 )
@@ -203,6 +217,8 @@ jq '.backend_kwargs.is_recompute' .leann/indexes/<name>/documents.leann.meta.jso
 ```
 - Built with `--recompute` → embedding server (iq) must be reachable at search time.
 - Built with `--no-recompute` → embeddings already in the index; no server needed at search time. **Plus**: metadata-prefilter queries use the fast stored-vector path (Wave 2.1) instead of re-embedding matches.
+
+Hybrid/BM25 searches require the BM25 sidecar. Current builds create and maintain FTS5 BM25 by default, including JSONL incremental updates, so do not add a build-side `--prebuild-bm25` flag. If results look stale after manual sidecar edits or external file surgery, rebuild the index instead of trying to repair the sidecar by hand.
 
 #### Picking `top_k` + `complexity`
 
@@ -368,6 +384,18 @@ print(s.facets(["parent_ref"]))
 ```python
 s.search(query, vector_weight=0.0)   # 0.0 = pure BM25, 1.0 = pure vector
 ```
+
+### "Batch several semantic queries through one embed call"
+```python
+result_lists = s.multi_search(
+    ["budget discussion", "pricing concern", "contract renewal"],
+    top_k=8,
+    vector_weight=0.4,
+    prefilter="auto",
+)
+```
+
+`multi_search()` batches only when that preserves semantics. It falls back to normal per-query search for recompute indexes, temporal parsing, grep, and pure BM25.
 
 ## When the user asks
 

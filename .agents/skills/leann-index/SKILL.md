@@ -10,12 +10,12 @@ LEANN is a vector DB with graph-based selective recomputation. Index data lives 
 **Stack assumptions:**
 - Embeddings: `BAAI/bge-m3` via **iq** at `http://100.122.112.83:8100/v1` (Tailscale IP — works from any device on the tailnet). iq routes to local infinity_emb.
 - Fallback for hermetic unit tests only: `sentence-transformers/all-MiniLM-L6-v2`.
-- Backend: HNSW (default). Don't touch DiskANN/IVF unless explicitly asked — they're pre-existing surfaces, not part of Wave 1/2.
+- Backend: HNSW (default) for large, append-only graph indexes. Use `flat` for small/medium corpora you **edit in place** — exact recall, cheap add/remove/**modify** by stable ID, and no-op rebuilds that embed zero rows. Flat is **not** JSONL-only: it works for `--docs` directory builds (markdown wikis, etc.) just as well. Verified: editing one `.md` file on a flat `--docs` index does a native remove+add of only the changed chunk, no `--force`, no collapse.
 
 ## Three entry points
 
 1. **`leann build <name> --docs <paths>`** — generic builder from filesystem.
-2. **`leann build-jsonl <name> --input rows.jsonl`** — exact metadata builder for already-chunked rows.
+2. **`leann build-jsonl <name> --input rows.jsonl`** — exact metadata builder for already-chunked rows; use `--incremental-by-id` when rows have stable IDs.
 3. **`leann index-<source>`** — specialized reader (browser, email, calendar, imessage, wechat, chatgpt, claude).
 
 ## Default invocation (use this unless told otherwise)
@@ -57,23 +57,43 @@ leann build-jsonl code-mode-tools \
   --text-field text \
   --metadata-field metadata \
   --id-field id \
-  --backend-name ivf \
+  --incremental-by-id \
+  --backend-name flat \
   --no-recompute \
+  --no-compact \
   --embedding-mode openai \
   --embedding-model BAAI/bge-m3 \
   --embedding-api-base http://100.122.112.83:8100/v1 \
   --embedding-api-key iq-local
 ```
 
-`build-jsonl` persists `source_kind=jsonl`, `input`, `text_field`, `metadata_field`, and `id_field` into `build_config`, so `leann rebuild code-mode-tools` replays the same JSONL build. IVF non-compact indexes can replace changed JSONL rows incrementally; other changed JSONL indexes fall back to a full rebuild.
+`--incremental-by-id` requires every row to have a unique stable ID in `--id-field`. If `metadata.id` is also present it must match the top-level ID; LEANN writes the stable ID into passage metadata as `id` and `source_document_id`.
+
+`build-jsonl` persists `source_kind=jsonl`, `input`, `text_field`, `metadata_field`, `id_field`, and `incremental_by_id` into `build_config`, so `leann rebuild code-mode-tools` replays the same JSONL build. It also stores a sidecar of per-row hashes; volatile `metadata.indexed_at` is ignored, so refresh timestamps alone do not re-embed rows.
+
+Incremental behavior is set by the **backend**, and applies to **both** `--docs` directory builds and `build-jsonl` (the stable ID is the JSONL `--id-field` for `build-jsonl`, or the per-file `source_document_id` written to `documents.ids.txt` / `documents.flat_id_map.json` for `--docs`):
+- **Flat**: exact NumPy vector matrix with stable-ID add/remove/modify. The preferred backend for small/medium corpora you edit in place (markdown wikis, CRM/tool-doc indexes) where row counts are modest and recall should be exact. Changed rows/files rewrite only the affected array rows via remove-then-add; no-op rebuilds embed zero rows when the content-addressed cache and rowhash sidecar both hit. (Verified on a `.md` `--docs` build: a modified file logs `Incremental native update (~1 modified): removing 1 old chunks, adding 1 new chunks` and the rest of the index is untouched.)
+- **IVF + non-compact**: true add/remove/modify by stable ID. Changed rows are remove-then-add, and passage store, offsets, meta, native index, and BM25 sidecar roll back together on failure.
+- **HNSW + non-compact**: **add-only** incremental. Added rows preserve stable IDs in `documents.ids.txt` and update BM25; **changed or removed** rows cannot be applied (HNSW can't delete by ID) and require `--force`. Footgun: on a `--no-recompute` HNSW index a plain (non-`--force`) rebuild after editing a file does NOT do a true full rebuild — it loads only the changed files and **silently collapses** the index to just those. Always `--force` HNSW after edits, or build the index as `flat`/`ivf`.
+- **Compact/read-only indexes**: no incremental update; use a full rebuild.
+
+Build-time embeddings use LEANN's content-addressed cache by default (`~/.leann/embed-cache.sqlite`, override with `LEANN_EMBED_CACHE_PATH`, disable with `LEANN_EMBED_CACHE=0`). Cache keys include canonicalization version, model, mode/provider, dimensions, normalization/pooling, prompt template, real truncation settings, and model revision when known; operational knobs such as batch size and timeouts intentionally do not affect the key.
+
+If an embedding server swaps weights behind the same model name, set `LEANN_EMBED_MODEL_REV=<stable-revision>` before building so old cache rows miss lazily instead of reusing stale vectors. LEANN also best-effort probes OpenAI-compatible `/models` once per process and uses explicit revision/fingerprint fields when the server exposes them; env wins over probe.
+
+Drift guards force a full rebuild when sidecars no longer agree: duplicate passage IDs, offset/passages mismatch, rowhash ID mismatch, stale BM25 text for the same ID set, missing HNSW native index, or reordered/missing `documents.ids.txt`.
+
+BM25/FTS5 is built and maintained by default. There is no `--prebuild-bm25` flag to pass for current fork behavior; use search-side `--vector-weight 0.0` for pure BM25 or `0.3`-`0.7` for hybrid.
 
 ## Force full rebuild
 
-By default `leann build` is **incremental** — adds new files only. To rebuild from scratch:
+By default `leann build` is **incremental**, and what that covers depends on the backend (see the table above): **HNSW** adds new files only (modify/remove need `--force`); **flat**/**IVF** add, modify, and remove in place by stable ID. To force a full rebuild from scratch on any backend:
 
 ```bash
 leann build my-docs --docs ./documents --force
 ```
+
+The content-addressed embedding cache (`~/.leann/embed-cache.sqlite`) makes even a `--force` rebuild cheap — unchanged chunks re-embed for free, so only genuinely changed text hits the embedding server.
 
 ## Rebuild with stored config
 
@@ -149,6 +169,7 @@ leann remove my-docs       # local first, then global
 - `--text-field FIELD` — searchable text field (default `text`)
 - `--metadata-field FIELD` — metadata object field (default `metadata`)
 - `--id-field FIELD` — stable passage ID field (default `id`)
+- `--incremental-by-id` — diff JSONL rows by stable ID and re-embed only new/changed rows where the backend can update in place
 - plus the same backend and embedding flags as `leann build`
 
 ### Embeddings (override defaults above)
@@ -178,13 +199,16 @@ leann remove my-docs       # local first, then global
 
 Deeper reference: `docs/dev/DECISIONS-INDEX.md`.
 
-### Backend (default is HNSW — don't change unless one of these applies)
+### Backend — pick by whether the corpus is edited and how big it is
+
+HNSW is the default, but it is **append-only**: if the corpus gets *edited* (pages rewritten, rows changed), prefer `flat` (small/medium) or `ivf`.
 
 | Use | When |
 |---|---|
-| **HNSW** (default) | Static or append-only corpus, fits in RAM. 95% of cases. |
-| **IVF** | Need true in-place add **and remove** without rebuild (e.g. live-syncing Slack/email where messages get edited or deleted). FAISS IVF + DirectMap.Hashtable. |
-| **DiskANN** | Corpus much larger than RAM (10M+ chunks). Slower build, larger on-disk graph, but searchable from disk. |
+| **HNSW** (default) | Large, static or **append-only** corpus, fits in RAM. Modify/remove require `--force`. |
+| **flat** | Small/medium corpus you **edit in place** (≲100k chunks): exact brute-force recall + true add/remove/**modify** by stable ID, no graph rebuild. Works for `--docs` (markdown) **and** JSONL. Best default for an actively-maintained wiki/tool-doc index. |
+| **IVF** | Need true in-place add/remove/modify at larger scale than flat wants to brute-force. FAISS IVF + DirectMap.Hashtable. |
+| **DiskANN** | Corpus much larger than RAM (10M+ chunks). Slower build, larger on-disk graph, but searchable from disk. Append-only like HNSW. |
 
 ### `--recompute` vs `--no-recompute` (this is THE LEANN tradeoff)
 
@@ -195,7 +219,7 @@ LEANN's value prop: store a pruned graph + recompute embeddings on demand → ~9
 | `--recompute` (default for HNSW build) | Graph only; embeddings recomputed via ZMQ embedding server during search | Higher (embedding compute on hot path) | **Tiny** | Big corpora, disk-constrained, you have a fast embedding server (iq). **Default for HNSW.** |
 | `--no-recompute` | Graph + all passage embeddings | Low (no recompute) | Large | Small corpus (<100k chunks), or no embedding server available at search time, or latency-critical UI. |
 
-Build flag and search flag **must match**. Mismatched search will error or silently return garbage.
+Build and search must agree on recompute, but you rarely set it by hand at search time: since Wave 2.1, `LeannSearcher` auto-detects `recompute_embeddings` from the index `meta.json` (default `None` = read from meta). With `--no-recompute` indexes only the query is embedded at search time; stored passage vectors are reused. Explicit `recompute_embeddings=True/False` still wins if you pass it.
 
 ### `--compact` (HNSW only)
 
@@ -253,7 +277,7 @@ Full schema in `docs/dev/SIGNALS.md`.
 
 ## Common gotchas
 
-1. **HNSW + recompute + incremental rebuild** raises `ValueError` early (fork QoL). Use `--force` for full rebuild.
+1. **HNSW can't modify or remove incrementally.** With `--recompute`, an incremental rebuild raises `ValueError` early (fork QoL). With `--no-recompute`, editing an existing file is worse: a plain rebuild **silently collapses** the index to just the changed files (the "falling back to full rebuild" message is misleading — it only loads the changed docs). Always `--force` HNSW after edits, or build the index as `--backend-name flat`/`ivf` so edits apply in place. (Pure *adds* of new files are fine on HNSW without `--force`.)
 2. **`--compact` indexes are read-only** — no `update_index`, no incremental add.
 3. **`--use-ast-chunking` silently falls back** if `astchunk` isn't installed. Always verify by checking the index `meta.json`.
 4. **Chunk size is in TOKENS** for doc/code, **CHARACTERS** for AST. Don't conflate.
@@ -276,5 +300,5 @@ See the `leann-search` skill for the search surface.
 - *"reindex"* / *"rebuild"* → `leann rebuild <name>` (reuses stored config); `--force` for full rebuild
 - *"rebuild but I forgot the original flags"* → `leann rebuild <name>` (config is stored with the index)
 - *"index code"* → add `--use-ast-chunking`
-- *"index won't update"* → it's compact or HNSW+recompute; use `--force`
+- *"index won't update"* / *"pages went missing / search returns almost nothing after a rebuild"* → on **HNSW** a *modified or removed* file isn't applied incrementally, and a non-`--force` rebuild can silently collapse the index to just the changed files. Fix: `--force`, or rebuild the index as `--backend-name flat` (small/medium) or `ivf` so edits modify in place. Also rule out `--compact` (read-only).
 - *"use a specific model"* → override `--embedding-model` + `--embedding-mode`
