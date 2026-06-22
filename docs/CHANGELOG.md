@@ -4,6 +4,12 @@
 
 ### Added
 
+- Added `leann build --top-folder-depth` for docs indexes whose useful category folders are nested below a wrapper directory. The default depth `1` preserves existing `top_folder` behavior; depth `2` maps paths like `Clients/BD/file.pdf` to `top_folder=BD` while preserving full `relative_path`, `folder_path`, and `source_root`.
+
+- Added `leann build-jsonl --incremental-by-id` for stable-ID JSONL corpora. The new mode stores row hashes, validates duplicate/conflicting IDs, re-embeds only new/changed rows where the backend supports it, falls back to full rebuilds for unsafe HNSW changes, and checks passage/vector/BM25 sidecar drift before trusting incremental state.
+
+- Added a build-time content-addressed embedding cache plus a `flat` backend for exact stable-ID JSONL indexes. Cache keys include only output-affecting embedding settings plus the canonicalization version, while flat stores normalized vectors in a NumPy matrix and supports remove/add/modify via stable IDs.
+
 - Added `leann build-jsonl` for metadata-rich, already-chunked inputs. It preserves arbitrary row metadata via `LeannBuilder.add_text()`, records JSONL field settings in `build_config`, and lets `leann rebuild <index>` replay JSONL builds without a Python helper.
 
 - Exposed metadata-aware search controls on `leann search` and the `leann_search` MCP tool: `vector_weight`, `prefilter`, `prefilter_threshold`, `explain_filters`, `diversify_by`, and `max_per_group`. Updated LEANN agent skills to document CLI, MCP, and Python usage.

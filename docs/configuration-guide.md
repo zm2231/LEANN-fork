@@ -174,6 +174,16 @@ leann build cadence-fast --docs ./notes --build-preset meetings
 
 Each completed `leann build` persists its resolved `build_config` into the index metadata. `leann rebuild <index>` and `leann watch <index>` replay that stored index config instead of reading your current machine defaults, so changing your global default embedding model later does not silently mutate old indexes.
 
+Docs builds stamp filesystem path metadata into every chunk: `source_root`, `relative_path`, `folder_path`, and `top_folder`. By default, `top_folder` is the first folder under `--docs`. Use `--top-folder-depth 2` when the first segment is only a wrapper directory and the real category is one level deeper:
+
+```bash
+leann build dropbox \
+  --docs /path/to/docs \
+  --top-folder-depth 2
+```
+
+For `/path/to/docs/Clients/BD/proposal.pdf`, this preserves `relative_path=Clients/BD/proposal.pdf` and `folder_path=Clients/BD`, while storing `top_folder=BD`.
+
 For metadata-rich rows that are already chunked, use `leann build-jsonl` instead of writing markdown files and passing `--docs`. The document loader preserves reader/file metadata, but JSONL is the first-class path when fields like `name`, `group`, `tier`, or `autoRunnable` must survive indexing exactly.
 
 ```bash

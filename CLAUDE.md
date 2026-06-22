@@ -75,6 +75,7 @@ uv run pre-commit run --all-files
 
 - `leann-backend-hnsw/`: Default backend using FAISS HNSW for fast in-memory search
 - `leann-backend-ivf/`: IVF backend (FAISS IndexIVFFlat + DirectMap.Hashtable) supporting in-place add/remove without rebuild
+- `leann-backend-flat/`: Exact NumPy flat-vector backend with stable-ID add/remove for small/medium indexes
 - `leann-backend-diskann/`: DiskANN backend for larger-than-memory datasets
 - `leann-mcp/`: MCP server for Claude Code integration
 
@@ -100,8 +101,8 @@ The IVF backend supports in-place updates and deletes without rebuilding the ent
 - `LeannBuilder.update_index()`: High-level API that orchestrates remove-then-add for changed files, compacts `passages.jsonl`, and updates the offset map.
 
 `leann build` is idempotent — re-running it on an existing index automatically performs an incremental update instead of a full rebuild. It detects new, modified, and removed files and applies the minimal set of changes:
-- **IVF**: Supports add, remove, and modify incrementally (remove old chunks then re-insert).
-- **HNSW** (non-compact): Supports add-only incremental updates; modified/removed files trigger a full rebuild.
+- **IVF / flat**: Support add, remove, and modify incrementally (remove old chunks then re-insert).
+- **HNSW**: Does not support docs incremental updates; any added, modified, or removed docs trigger a full rebuild.
 - Use `--force` / `-f` to force a full rebuild regardless.
 
 ### Index Structure
@@ -135,31 +136,65 @@ leann list
 leann remove my-docs
 ```
 
-## Custom Fork — `zain/custom-patches` branch
+## Custom Fork — `zain-canonical` branch
 
-This repo is maintained as a reference fork. Local patches live on `zain/custom-patches` on top of upstream `main`.
+This repo is maintained as a reference fork. Local patches live on `zain-canonical`
+on top of upstream `main`.
 
-### Install from this branch (leann-core from source, backends from PyPI)
+### Install from this branch
+
+Always install `leann-core` and the local backends from this checkout together.
+Do not install `leann-core` from the fork while leaving `leann-backend-hnsw`
+from PyPI: filtered no-recompute search depends on the fork's HNSW stored-vector
+subset scoring (`HNSWSearcher.score_passage_ids`). A stale backend silently falls
+back to expensive passage re-embedding.
+
+Canonical local CLI reinstall command:
 
 ```bash
+repo_root="$(pwd)"
 uv tool install --reinstall \
-  /Volumes/4/GitHub/pi-ult/references/LEANN/packages/leann-core \
-  --with leann-backend-hnsw \
-  --with leann-backend-diskann
+  "${repo_root}/packages/leann-core" \
+  --with "${repo_root}/packages/leann-backend-hnsw" \
+  --with "${repo_root}/packages/leann-backend-ivf" \
+  --with "${repo_root}/packages/leann-backend-flat" \
+  --with "${repo_root}/packages/leann-backend-diskann"
 ```
 
-> Backends are installed from PyPI because they require native builds (libomp, DiskANN submodules).
-> Only `leann-core` (CLI + API) is sourced from this branch.
+Also refresh regular venvs that import LEANN:
+
+```bash
+repo_root="$(pwd)"
+uv pip install --python "${repo_root}/.venv/bin/python" \
+  -e "${repo_root}/packages/leann-core" \
+  -e "${repo_root}/packages/leann-backend-hnsw" \
+  -e "${repo_root}/packages/leann-backend-ivf" \
+  -e "${repo_root}/packages/leann-backend-flat" \
+  -e "${repo_root}/packages/leann-backend-diskann"
+```
+
+Local helper scripts for personal machines must stay gitignored. This checkout
+uses `docs/dev/install-local-leann.sh` locally for the full reinstall procedure
+and source-hash/import checks; recreate it from the commands above if it is
+absent.
+
+```bash
+docs/dev/install-local-leann.sh
+```
+
+Pass additional Python interpreters to update more venvs:
+
+```bash
+docs/dev/install-local-leann.sh /path/to/venv/bin/python
+```
 
 ### Keeping up with upstream
 
 ```bash
 git fetch origin
-git rebase origin/main   # on zain/custom-patches
+git rebase origin/main   # on zain-canonical
 # Reinstall after rebase
-uv tool install --reinstall \
-  /Volumes/4/GitHub/pi-ult/references/LEANN/packages/leann-core \
-  --with leann-backend-hnsw --with leann-backend-diskann
+docs/dev/install-local-leann.sh
 ```
 
 ### Patches applied (on top of upstream)
@@ -250,7 +285,7 @@ git commit -m “feat: ...” # follow conventional commits
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **LEANN-fork** (9462 symbols, 15367 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **LEANN-fork** (59430 symbols, 114502 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 
@@ -262,12 +297,44 @@ This project is indexed by GitNexus as **LEANN-fork** (9462 symbols, 15367 relat
 - When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
 - When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
 
+## When Debugging
+
+1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
+2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
+3. `READ gitnexus://repo/LEANN-fork/process/{processName}` — trace the full execution flow step by step
+4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
+
+## When Refactoring
+
+- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
+- **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
+- After any refactor: run `gitnexus_detect_changes({scope: "all"})` to verify only expected files changed.
+
 ## Never Do
 
 - NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
 - NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
 - NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+
+## Tools Quick Reference
+
+| Tool | When to use | Command |
+|------|-------------|---------|
+| `query` | Find code by concept | `gitnexus_query({query: "auth validation"})` |
+| `context` | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})` |
+| `impact` | Blast radius before editing | `gitnexus_impact({target: "X", direction: "upstream"})` |
+| `detect_changes` | Pre-commit scope check | `gitnexus_detect_changes({scope: "staged"})` |
+| `rename` | Safe multi-file rename | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
+| `cypher` | Custom graph queries | `gitnexus_cypher({query: "MATCH ..."})` |
+
+## Impact Risk Levels
+
+| Depth | Meaning | Action |
+|-------|---------|--------|
+| d=1 | WILL BREAK — direct callers/importers | MUST update these |
+| d=2 | LIKELY AFFECTED — indirect deps | Should test |
+| d=3 | MAY NEED TESTING — transitive | Test if critical path |
 
 ## Resources
 
@@ -278,15 +345,41 @@ This project is indexed by GitNexus as **LEANN-fork** (9462 symbols, 15367 relat
 | `gitnexus://repo/LEANN-fork/processes` | All execution flows |
 | `gitnexus://repo/LEANN-fork/process/{name}` | Step-by-step execution trace |
 
+## Self-Check Before Finishing
+
+Before completing any code modification task, verify:
+1. `gitnexus_impact` was run for all modified symbols
+2. No HIGH/CRITICAL risk warnings were ignored
+3. `gitnexus_detect_changes()` confirms changes match expected scope
+4. All d=1 (WILL BREAK) dependents were updated
+
+## Keeping the Index Fresh
+
+After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
+
+```bash
+npx gitnexus analyze
+```
+
+If the index previously included embeddings, preserve them by adding `--embeddings`:
+
+```bash
+npx gitnexus analyze --embeddings
+```
+
+To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+
+> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+
 ## CLI
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+Public LEANN skills live under `skills/`. Local `.claude/skills/` and
+`.agents/skills/` copies are ignored because they may contain personal runtime
+settings.
+
+| Task | Public skill file |
+|------|-------------------|
+| Build, rebuild, watch, or configure LEANN indexes | `skills/leann-index/SKILL.md` |
+| Search LEANN indexes through CLI, MCP, or Python | `skills/leann-search/SKILL.md` |
 
 <!-- gitnexus:end -->
