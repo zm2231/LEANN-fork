@@ -2,7 +2,8 @@
 Tests for incremental build (Feature #89).
 
 When an index already exists and build is run again without --force,
-only new files are indexed and appended to the existing index (HNSW, non-compact only).
+flat and IVF indexes update changed docs in place by stable ID. HNSW does not
+support docs incremental updates; any docs change rebuilds the full corpus.
 Change detection uses content-hash (merkle tree) via FileSynchronizer.
 """
 
@@ -106,11 +107,11 @@ def test_file_synchronizer_touch_no_false_positive(tmp_path):
     os.environ.get("CI") == "true",
     reason="Skip in CI to avoid embedding/model load",
 )
-def test_incremental_build_adds_only_new_files(tmp_path):
-    """Build once with one file, add a second file, run build again without --force; index grows."""
+def test_hnsw_docs_change_rebuilds_full_corpus(tmp_path):
+    """HNSW rebuilds the full docs corpus when a file is added."""
     import asyncio
+    import json
 
-    from leann.api import LeannSearcher
     from leann.cli import LeannCLI
 
     docs_dir = tmp_path / "docs"
@@ -122,7 +123,6 @@ def test_incremental_build_adds_only_new_files(tmp_path):
     cli.indexes_dir.mkdir(parents=True, exist_ok=True)
     index_name = "incr_test"
     index_dir = cli.indexes_dir / index_name
-    index_path = cli.get_index_path(index_name)
 
     parser = cli.create_parser()
     args = parser.parse_args(
@@ -148,7 +148,8 @@ def test_incremental_build_adds_only_new_files(tmp_path):
     # Add second file
     (docs_dir / "b.txt").write_text("Second document content.", encoding="utf-8")
 
-    # Build again without --force (incremental)
+    # Build again without --force. HNSW has no docs incremental contract, so this
+    # must reload the whole corpus rather than collapsing to only changed files.
     args2 = parser.parse_args(
         [
             "build",
@@ -166,12 +167,93 @@ def test_incremental_build_adds_only_new_files(tmp_path):
     )
     asyncio.run(cli.build_index(args2))
 
-    # Index should still be searchable and contain both files
+    passages_file = index_dir / "documents.leann.passages.jsonl"
+    with open(passages_file, encoding="utf-8") as f:
+        passage_text = "\n".join(json.loads(line)["text"] for line in f if line.strip())
+    assert "First document content for indexing." in passage_text
+    assert "Second document content." in passage_text
+
+
+@pytest.mark.skipif(
+    os.environ.get("CI") == "true",
+    reason="Skip in CI to avoid embedding/model load",
+)
+def test_hnsw_then_ivf_incremental_same_process(tmp_path):
+    """HNSW and IVF FAISS bindings must coexist in one interpreter."""
+    import asyncio
+
+    from leann.api import LeannSearcher
+    from leann.cli import LeannCLI
+
+    cli = LeannCLI()
+    cli.indexes_dir = tmp_path / ".leann" / "indexes"
+    cli.indexes_dir.mkdir(parents=True, exist_ok=True)
+    parser = cli.create_parser()
+
+    hnsw_docs = tmp_path / "hnsw_docs"
+    hnsw_docs.mkdir()
+    (hnsw_docs / "a.txt").write_text("HNSW backend loads its FAISS binding.", encoding="utf-8")
+    asyncio.run(
+        cli.build_index(
+            parser.parse_args(
+                [
+                    "build",
+                    "hnsw_first",
+                    "--docs",
+                    str(hnsw_docs),
+                    "--backend-name",
+                    "hnsw",
+                    "--embedding-model",
+                    "all-MiniLM-L6-v2",
+                    "--embedding-mode",
+                    "sentence-transformers",
+                    "--force",
+                ]
+            )
+        )
+    )
+
+    ivf_docs = tmp_path / "ivf_docs"
+    ivf_docs.mkdir()
+    phrase_v1 = "IVF_AFTER_HNSW_V1_ALPHA"
+    phrase_v2 = "IVF_AFTER_HNSW_V2_BRAVO"
+    (ivf_docs / "target.txt").write_text(phrase_v1, encoding="utf-8")
+    for i in range(110):
+        (ivf_docs / f"filler_{i:03d}.txt").write_text(
+            f"Filler document {i} for IVF training.",
+            encoding="utf-8",
+        )
+
+    index_name = "ivf_after_hnsw"
+    index_path = cli.get_index_path(index_name)
+    ivf_args = [
+        "build",
+        index_name,
+        "--docs",
+        str(ivf_docs),
+        "--backend-name",
+        "ivf",
+        "--embedding-model",
+        "all-MiniLM-L6-v2",
+        "--embedding-mode",
+        "sentence-transformers",
+    ]
+    asyncio.run(cli.build_index(parser.parse_args([*ivf_args, "--force"])))
+
     searcher = LeannSearcher(index_path)
-    results = searcher.search("Second document", top_k=3)
+    results = searcher.search(phrase_v1, top_k=10)
     searcher.cleanup()
-    assert len(results) >= 1
-    assert "Second" in results[0].text or "document" in results[0].text
+    assert any(phrase_v1 in r.text for r in results)
+
+    (ivf_docs / "target.txt").write_text(phrase_v2, encoding="utf-8")
+    asyncio.run(cli.build_index(parser.parse_args(ivf_args)))
+
+    searcher = LeannSearcher(index_path)
+    old_results = searcher.search(phrase_v1, top_k=10)
+    new_results = searcher.search(phrase_v2, top_k=10)
+    searcher.cleanup()
+    assert all(phrase_v1 not in r.text for r in old_results)
+    assert any(phrase_v2 in r.text for r in new_results)
 
 
 @pytest.mark.skipif(

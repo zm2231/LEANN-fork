@@ -37,6 +37,7 @@ BUILD_ARGV_TEMPLATE = [
     "--backend-name",
     "hnsw",
     "--no-compact",
+    "--no-recompute",
     "--embedding-model",
     "all-MiniLM-L6-v2",
     "--embedding-mode",
@@ -53,10 +54,14 @@ def _build_argv(docs_dir: str) -> list[str]:
     return [a.format(docs_dir=docs_dir) for a in BUILD_ARGV_TEMPLATE]
 
 
+def _run(coro):
+    return asyncio.run(coro)
+
+
 def test_build_memory_index(cli_instance, memory_fixtures):
     """Build a non-compact HNSW index on the memory fixtures."""
     args = _parse_args(cli_instance, _build_argv(str(memory_fixtures)))
-    asyncio.get_event_loop().run_until_complete(cli_instance.build_index(args))
+    _run(cli_instance.build_index(args))
 
     index_dir = cli_instance.indexes_dir / "openclaw-memory"
     assert index_dir.exists(), "Index directory was not created"
@@ -71,14 +76,14 @@ def test_build_memory_index(cli_instance, memory_fixtures):
 def _build_and_search(cli_instance, memory_fixtures, capsys, query, top_k=3):
     """Helper: build index, clear capsys, search, return parsed JSON results."""
     build_args = _parse_args(cli_instance, _build_argv(str(memory_fixtures)))
-    asyncio.get_event_loop().run_until_complete(cli_instance.build_index(build_args))
+    _run(cli_instance.build_index(build_args))
     capsys.readouterr()  # discard build output
 
     search_args = _parse_args(
         cli_instance,
         ["search", "openclaw-memory", query, "--top-k", str(top_k), "--json", "--non-interactive"],
     )
-    asyncio.get_event_loop().run_until_complete(cli_instance.search_documents(search_args))
+    _run(cli_instance.search_documents(search_args))
 
     captured = capsys.readouterr()
     assert captured.out.strip(), f"Search produced no stdout (stderr: {captured.err[:200]})"
@@ -105,11 +110,11 @@ def test_search_relevance(cli_instance, memory_fixtures, capsys):
 def test_idempotent_rebuild(cli_instance, memory_fixtures, capsys):
     """Running build twice should detect no changes on the second run."""
     args1 = _parse_args(cli_instance, _build_argv(str(memory_fixtures)))
-    asyncio.get_event_loop().run_until_complete(cli_instance.build_index(args1))
+    _run(cli_instance.build_index(args1))
     capsys.readouterr()  # discard first build output
 
     args2 = _parse_args(cli_instance, _build_argv(str(memory_fixtures)))
-    asyncio.get_event_loop().run_until_complete(cli_instance.build_index(args2))
+    _run(cli_instance.build_index(args2))
 
     captured = capsys.readouterr()
     assert "up to date" in captured.out.lower() or "no changes" in captured.out.lower()
@@ -118,7 +123,7 @@ def test_idempotent_rebuild(cli_instance, memory_fixtures, capsys):
 def test_incremental_add(cli_instance, memory_fixtures, capsys):
     """Adding a new file should trigger incremental update, not full rebuild."""
     args1 = _parse_args(cli_instance, _build_argv(str(memory_fixtures)))
-    asyncio.get_event_loop().run_until_complete(cli_instance.build_index(args1))
+    _run(cli_instance.build_index(args1))
     capsys.readouterr()  # discard first build output
 
     new_file = memory_fixtures / "memory" / "2026-02-26.md"
@@ -129,7 +134,7 @@ def test_incremental_add(cli_instance, memory_fixtures, capsys):
     )
 
     args2 = _parse_args(cli_instance, _build_argv(str(memory_fixtures)))
-    asyncio.get_event_loop().run_until_complete(cli_instance.build_index(args2))
+    _run(cli_instance.build_index(args2))
     capsys.readouterr()  # discard rebuild output
 
     search_args = _parse_args(
@@ -144,7 +149,7 @@ def test_incremental_add(cli_instance, memory_fixtures, capsys):
             "--non-interactive",
         ],
     )
-    asyncio.get_event_loop().run_until_complete(cli_instance.search_documents(search_args))
+    _run(cli_instance.search_documents(search_args))
 
     captured = capsys.readouterr()
     assert captured.out.strip(), f"Search produced no stdout (stderr: {captured.err[:200]})"

@@ -50,6 +50,14 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
             backend_module_name=backend_module_name,
         )
 
+    def _validate_query_embeddings(self, embeddings: np.ndarray) -> np.ndarray:
+        if embeddings.ndim != 2 or embeddings.shape[1] != self.dimensions:
+            raise ValueError(
+                "Query embedding dimension mismatch: "
+                f"expected {self.dimensions}, got {embeddings.shape}"
+            )
+        return embeddings
+
     def _load_meta(self) -> dict[str, Any]:
         """Loads the metadata file associated with the index."""
         # This is the corrected logic for finding the meta file.
@@ -143,9 +151,8 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
                     daemon_ttl_seconds=self.daemon_ttl_seconds,
                 )
 
-                return self._compute_embedding_via_server([query], zmq_port)[
-                    0:1
-                ]  # Return (1, D) shape
+                server_embeddings = self._compute_embedding_via_server([query], zmq_port)
+                return self._validate_query_embeddings(server_embeddings[0:1])
             except Exception as e:
                 print(f"⚠️ Embedding server failed: {e}")
                 print("⏭️ Falling back to direct model loading...")
@@ -154,12 +161,13 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
         from .embedding_compute import compute_embeddings
 
         embedding_mode = self.meta.get("embedding_mode", "sentence-transformers")
-        return compute_embeddings(
+        embeddings = compute_embeddings(
             [query],
             self.embedding_model,
             embedding_mode,
             provider_options=self.embedding_options,
         )
+        return self._validate_query_embeddings(embeddings)
 
     def compute_query_embeddings(
         self,
@@ -186,7 +194,8 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
                     use_daemon=self.use_daemon,
                     daemon_ttl_seconds=self.daemon_ttl_seconds,
                 )
-                return self._compute_embedding_via_server(templated, zmq_port)
+                server_embeddings = self._compute_embedding_via_server(templated, zmq_port)
+                return self._validate_query_embeddings(server_embeddings)
             except Exception as e:
                 print(f"⚠️ Embedding server failed: {e}")
                 print("⏭️ Falling back to direct model loading...")
@@ -194,12 +203,13 @@ class BaseSearcher(LeannBackendSearcherInterface, ABC):
         from .embedding_compute import compute_embeddings
 
         embedding_mode = self.meta.get("embedding_mode", "sentence-transformers")
-        return compute_embeddings(
+        embeddings = compute_embeddings(
             templated,
             self.embedding_model,
             embedding_mode,
             provider_options=self.embedding_options,
         )
+        return self._validate_query_embeddings(embeddings)
 
     def _compute_embedding_via_server(self, chunks: list, zmq_port: int) -> np.ndarray:
         """Compute embeddings using the ZMQ embedding server."""

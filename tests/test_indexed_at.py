@@ -1,7 +1,9 @@
 import asyncio
 import json
+import pickle
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 from leann.api import LeannSearcher
@@ -101,7 +103,9 @@ def test_build_index_from_documents_stamps_filesystem_axes(tmp_path):
 
     asyncio.run(cli._build_index_from_documents(args, documents))
 
-    passages_path = tmp_path / ".leann" / "indexes" / args.index_name / "documents.leann.passages.jsonl"
+    passages_path = (
+        tmp_path / ".leann" / "indexes" / args.index_name / "documents.leann.passages.jsonl"
+    )
     with passages_path.open(encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
 
@@ -118,3 +122,235 @@ def test_build_index_from_documents_stamps_filesystem_axes(tmp_path):
     assert datetime.fromisoformat(metadata["modified_at"]) == datetime.fromtimestamp(
         file_stat.st_mtime, tz=timezone.utc
     )
+
+
+def test_build_docs_command_stamps_temporal_and_folder_metadata(monkeypatch, tmp_path):
+    docs = tmp_path / "docs"
+    bd = docs / "BD"
+    bd.mkdir(parents=True)
+    source_file = bd / "proposal.md"
+    source_file.write_text("alpha account proposal", encoding="utf-8")
+
+    class FakeBuilder:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chunks = []
+
+        def add_text(self, text, metadata=None):
+            metadata = dict(metadata or {})
+            self.chunks.append(
+                {
+                    "id": metadata.get("id", str(len(self.chunks))),
+                    "text": text,
+                    "metadata": metadata,
+                }
+            )
+
+        def build_index(self, index_path):
+            index_path = Path(index_path)
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            (index_path.parent / f"{index_path.name}.meta.json").write_text(
+                json.dumps(
+                    {
+                        "backend_name": self.kwargs["backend_name"],
+                        "embedding_model": self.kwargs["embedding_model"],
+                        "embedding_mode": self.kwargs["embedding_mode"],
+                        "total_passages": len(self.chunks),
+                        "backend_kwargs": {
+                            "is_compact": self.kwargs["is_compact"],
+                            "is_recompute": self.kwargs["is_recompute"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            offsets = {}
+            with open(
+                index_path.parent / f"{index_path.name}.passages.jsonl", "w", encoding="utf-8"
+            ) as f:
+                for chunk in self.chunks:
+                    offsets[chunk["id"]] = f.tell()
+                    f.write(json.dumps(chunk) + "\n")
+            with open(index_path.parent / f"{index_path.name}.passages.idx", "wb") as f:
+                pickle.dump(offsets, f)
+
+    import leann.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "LeannBuilder", FakeBuilder)
+
+    cli = LeannCLI()
+    cli.indexes_dir = tmp_path / ".leann" / "indexes"
+    cli.indexes_dir.mkdir(parents=True, exist_ok=True)
+    cli.register_project_dir = lambda: None
+
+    parser = cli.create_parser()
+    args = parser.parse_args(
+        [
+            "build",
+            "docs-metadata",
+            "--docs",
+            str(docs),
+            "--backend-name",
+            "flat",
+            "--embedding-model",
+            "all-MiniLM-L6-v2",
+            "--embedding-mode",
+            "sentence-transformers",
+            "--force",
+        ]
+    )
+
+    asyncio.run(cli.build_index(args))
+
+    passages_path = (
+        tmp_path / ".leann" / "indexes" / "docs-metadata" / "documents.leann.passages.jsonl"
+    )
+    with passages_path.open(encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+
+    assert len(rows) == 1
+    metadata = rows[0]["metadata"]
+    assert metadata["source_root"] == str(docs.resolve())
+    assert metadata["relative_path"] == "BD/proposal.md"
+    assert metadata["folder_path"] == "BD"
+    assert metadata["top_folder"] == "BD"
+    assert ISO_UTC_RE.match(metadata["indexed_at"])
+    assert ISO_UTC_RE.match(metadata["created_at"])
+    assert ISO_UTC_RE.match(metadata["modified_at"])
+    assert "event_time" not in metadata
+
+
+def test_build_docs_command_uses_top_folder_depth(monkeypatch, tmp_path):
+    docs = tmp_path / "docs"
+    nested = docs / "Quoxient" / "BD"
+    nested.mkdir(parents=True)
+    source_file = nested / "proposal.md"
+    source_file.write_text("alpha account proposal", encoding="utf-8")
+
+    class FakeBuilder:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chunks = []
+
+        def add_text(self, text, metadata=None):
+            metadata = dict(metadata or {})
+            self.chunks.append(
+                {
+                    "id": metadata.get("id", str(len(self.chunks))),
+                    "text": text,
+                    "metadata": metadata,
+                }
+            )
+
+        def build_index(self, index_path):
+            index_path = Path(index_path)
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            (index_path.parent / f"{index_path.name}.meta.json").write_text(
+                json.dumps(
+                    {
+                        "backend_name": self.kwargs["backend_name"],
+                        "embedding_model": self.kwargs["embedding_model"],
+                        "embedding_mode": self.kwargs["embedding_mode"],
+                        "total_passages": len(self.chunks),
+                        "backend_kwargs": {
+                            "is_compact": self.kwargs["is_compact"],
+                            "is_recompute": self.kwargs["is_recompute"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            offsets = {}
+            with open(
+                index_path.parent / f"{index_path.name}.passages.jsonl", "w", encoding="utf-8"
+            ) as f:
+                for chunk in self.chunks:
+                    offsets[chunk["id"]] = f.tell()
+                    f.write(json.dumps(chunk) + "\n")
+            with open(index_path.parent / f"{index_path.name}.passages.idx", "wb") as f:
+                pickle.dump(offsets, f)
+
+    import leann.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "LeannBuilder", FakeBuilder)
+
+    cli = LeannCLI()
+    cli.indexes_dir = tmp_path / ".leann" / "indexes"
+    cli.indexes_dir.mkdir(parents=True, exist_ok=True)
+    cli.register_project_dir = lambda: None
+
+    parser = cli.create_parser()
+    args = parser.parse_args(
+        [
+            "build",
+            "docs-metadata",
+            "--docs",
+            str(docs),
+            "--top-folder-depth",
+            "2",
+            "--backend-name",
+            "flat",
+            "--embedding-model",
+            "all-MiniLM-L6-v2",
+            "--embedding-mode",
+            "sentence-transformers",
+            "--force",
+        ]
+    )
+
+    asyncio.run(cli.build_index(args))
+
+    passages_path = (
+        tmp_path / ".leann" / "indexes" / "docs-metadata" / "documents.leann.passages.jsonl"
+    )
+    with passages_path.open(encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f if line.strip()]
+
+    assert len(rows) == 1
+    metadata = rows[0]["metadata"]
+    assert metadata["source_root"] == str(docs.resolve())
+    assert metadata["relative_path"] == "Quoxient/BD/proposal.md"
+    assert metadata["folder_path"] == "Quoxient/BD"
+    assert metadata["top_folder"] == "BD"
+
+
+def test_search_show_metadata_prints_canonical_temporal_fields(monkeypatch, tmp_path, capsys):
+    cli = LeannCLI()
+    cli.indexes_dir = tmp_path / ".leann" / "indexes"
+    cli.indexes_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cli, "_resolve_index_path", lambda *args, **kwargs: str(tmp_path / "idx"))
+
+    class FakeSearcher:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def search(self, *args, **kwargs):
+            return [
+                SimpleNamespace(
+                    id="row-a",
+                    score=0.5,
+                    text="alpha",
+                    metadata={
+                        "file_path": "/docs/BD/proposal.md",
+                        "created_at": "2026-01-01T00:00:00+00:00",
+                        "modified_at": "2026-01-02T00:00:00+00:00",
+                        "event_time": "2026-01-03T00:00:00+00:00",
+                        "indexed_at": "2026-01-04T00:00:00+00:00",
+                        "source": "/docs/BD/proposal.md",
+                    },
+                )
+            ]
+
+    import leann.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "LeannSearcher", FakeSearcher)
+    parser = cli.create_parser()
+    args = parser.parse_args(["search", "idx", "alpha", "--show-metadata", "--non-interactive"])
+
+    asyncio.run(cli.search_documents(args))
+
+    out = capsys.readouterr().out
+    assert "Created: 2026-01-01T00:00:00+00:00" in out
+    assert "Modified: 2026-01-02T00:00:00+00:00" in out
+    assert "Event: 2026-01-03T00:00:00+00:00" in out
+    assert "Indexed: 2026-01-04T00:00:00+00:00" in out

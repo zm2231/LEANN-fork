@@ -8,6 +8,7 @@ import logging
 import os
 import pickle
 import re
+import shutil
 import subprocess
 import time
 import warnings
@@ -579,6 +580,36 @@ class Fts5BM25Index(BM25Index):
         finally:
             conn.close()
 
+    def add_documents(self, documents: list[dict[str, Any]]) -> None:
+        if not documents:
+            return
+        conn = self._connect()
+        conn.executemany(
+            "INSERT INTO bm25_passages(id, text) VALUES (?, ?)",
+            ((str(d["id"]), d.get("text", "")) for d in documents),
+        )
+        conn.commit()
+
+    def delete_ids(self, ids: list[str]) -> None:
+        if not ids:
+            return
+        conn = self._connect()
+        conn.executemany(
+            "DELETE FROM bm25_passages WHERE id = ?",
+            ((str(doc_id),) for doc_id in ids),
+        )
+        conn.commit()
+
+    def count(self) -> int:
+        conn = self._connect()
+        row = conn.execute("SELECT COUNT(*) FROM bm25_passages").fetchone()
+        return int(row[0]) if row else 0
+
+    def documents(self) -> list[dict[str, str]]:
+        conn = self._connect()
+        rows = conn.execute("SELECT id, text FROM bm25_passages").fetchall()
+        return [{"id": str(doc_id), "text": text or ""} for doc_id, text in rows]
+
     def search(self, query: str, top_k: int = 5) -> list["SearchResult"]:
         # Strip punctuation, lowercase, OR the terms together. Avoids FTS5
         # query syntax surprises (`:`, `*`, etc.) for natural-language queries.
@@ -811,13 +842,17 @@ class LeannBuilder:
         with open(offset_file, "wb") as f:
             pickle.dump(offset_map, f)
         texts_to_embed = [c["text"] for c in self.chunks]
+        embedding_options = {
+            **self.embedding_options,
+            "_leann_dimensions": self.dimensions,
+        }
         embeddings = compute_embeddings(
             texts_to_embed,
             self.embedding_model,
             self.embedding_mode,
             use_server=False,
             is_build=True,
-            provider_options=self.embedding_options,
+            provider_options=embedding_options,
         )
         string_ids = [chunk["id"] for chunk in self.chunks]
         # Persist ID map alongside index so backends that return integer labels can remap to passage IDs
@@ -1113,41 +1148,108 @@ class LeannBuilder:
             raise ValueError(
                 f"Index was built with backend '{backend_name}', cannot update with '{self.backend_name}'."
             )
+        bm25_db_name = meta.get("bm25_db")
+        bm25_db_path = index_dir / bm25_db_name if bm25_db_name else None
 
         with open(offset_file, "rb") as f:
             offset_map: dict[str, int] = pickle.load(f)
         existing_ids = set(offset_map.keys())
+        native_index_backup: Optional[Path] = None
+        native_passages_backup: Optional[Path] = None
+        native_offset_backup: Optional[Path] = None
+        native_meta_backup: Optional[Path] = None
+        native_bm25_backup: Optional[Path] = None
 
-        # IVF: optional delete (for reindex / file-change: remove then re-insert)
-        if remove_passage_ids and backend_name == "ivf":
+        def restore_native_backups() -> None:
+            if native_index_backup and native_index_backup.exists():
+                shutil.copy2(native_index_backup, index_file)
+            if native_passages_backup and native_passages_backup.exists():
+                shutil.copy2(native_passages_backup, passages_file)
+            if native_offset_backup and native_offset_backup.exists():
+                shutil.copy2(native_offset_backup, offset_file)
+            if native_meta_backup and native_meta_backup.exists():
+                shutil.copy2(native_meta_backup, meta_path)
+            if native_bm25_backup and native_bm25_backup.exists() and bm25_db_path:
+                shutil.copy2(native_bm25_backup, bm25_db_path)
+
+        def cleanup_native_backups() -> None:
+            for backup in (
+                native_index_backup,
+                native_passages_backup,
+                native_offset_backup,
+                native_meta_backup,
+                native_bm25_backup,
+            ):
+                if backup and backup.exists():
+                    backup.unlink()
+
+        # Native remove-capable backends: optional delete before re-insert.
+        if remove_passage_ids and backend_name in ("ivf", "flat"):
+            native_index_backup = index_file.with_suffix(index_file.suffix + ".update.bak")
+            native_passages_backup = passages_file.with_suffix(
+                passages_file.suffix + ".update.bak"
+            )
+            native_offset_backup = offset_file.with_suffix(offset_file.suffix + ".update.bak")
+            native_meta_backup = meta_path.with_suffix(meta_path.suffix + ".update.bak")
+            native_bm25_backup = (
+                bm25_db_path.with_suffix(bm25_db_path.suffix + ".update.bak")
+                if bm25_db_path and bm25_db_path.exists()
+                else None
+            )
+            shutil.copy2(index_file, native_index_backup)
+            shutil.copy2(passages_file, native_passages_backup)
+            shutil.copy2(offset_file, native_offset_backup)
+            shutil.copy2(meta_path, native_meta_backup)
+            if native_bm25_backup and bm25_db_path:
+                shutil.copy2(bm25_db_path, native_bm25_backup)
+            offset_map_backup = offset_map.copy()
             try:
-                from leann_backend_ivf import remove_ids as ivf_remove_ids
+                try:
+                    if backend_name == "ivf":
+                        from leann_backend_ivf import remove_ids as backend_remove_ids
+                    else:
+                        from leann_backend_flat import remove_ids as backend_remove_ids
 
-                nremoved = ivf_remove_ids(str(path), remove_passage_ids)
-                if nremoved < len(remove_passage_ids):
-                    logger.warning(
-                        "IVF update_index: removed %d of %d requested passage IDs "
-                        "(some may have been stale).",
-                        nremoved,
-                        len(remove_passage_ids),
+                    nremoved = backend_remove_ids(str(path), remove_passage_ids)
+                    if nremoved < len(remove_passage_ids):
+                        logger.warning(
+                            "%s update_index: removed %d of %d requested passage IDs "
+                            "(some may have been stale).",
+                            backend_name.upper(),
+                            nremoved,
+                            len(remove_passage_ids),
+                        )
+                except ImportError:
+                    raise RuntimeError(
+                        f"{backend_name} backend required for remove_ids. "
+                        f"Install leann-backend-{backend_name}."
                     )
-            except ImportError:
-                raise RuntimeError(
-                    "IVF backend required for remove_ids. Install leann-backend-ivf."
-                )
-            for pid in remove_passage_ids:
-                offset_map.pop(pid, None)
-            existing_ids -= set(remove_passage_ids)
+                for pid in remove_passage_ids:
+                    offset_map.pop(pid, None)
+                existing_ids -= set(remove_passage_ids)
 
-            # Compact passages.jsonl: rewrite keeping only entries in offset_map
-            self._compact_passages(passages_file, offset_file, offset_map)
+                # Compact passages.jsonl: rewrite keeping only entries in offset_map
+                self._compact_passages(passages_file, offset_file, offset_map)
+                if bm25_db_path and bm25_db_path.exists():
+                    bm25 = Fts5BM25Index(str(bm25_db_path))
+                    try:
+                        bm25.delete_ids(remove_passage_ids)
+                    finally:
+                        bm25.close()
+            except Exception:
+                offset_map = offset_map_backup
+                restore_native_backups()
+                raise
 
         if not self.chunks:
-            meta["total_passages"] = len(offset_map)
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta, f, indent=2)
-            self.chunks.clear()
-            return
+            try:
+                meta["total_passages"] = len(offset_map)
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2)
+                self.chunks.clear()
+                return
+            finally:
+                cleanup_native_backups()
 
         meta_backend_kwargs = meta.get("backend_kwargs", {})
         if backend_name == "hnsw":
@@ -1193,13 +1295,17 @@ class LeannBuilder:
             return
 
         texts_to_embed = [chunk["text"] for chunk in valid_chunks]
+        embedding_options = {
+            **self.embedding_options,
+            "_leann_dimensions": meta.get("dimensions"),
+        }
         embeddings = compute_embeddings(
             texts_to_embed,
             self.embedding_model,
             self.embedding_mode,
             use_server=False,
             is_build=True,
-            provider_options=self.embedding_options,
+            provider_options=embedding_options,
         )
 
         embedding_dim = embeddings.shape[1]
@@ -1215,24 +1321,47 @@ class LeannBuilder:
             norms[norms == 0] = 1
             embeddings = embeddings / norms
 
-        # IVF: add_vectors then append passages/offset (no ZMQ/server)
-        if backend_name == "ivf":
+        # Native remove-capable backends: add_vectors then append passages/offset (no ZMQ/server).
+        if backend_name in ("ivf", "flat"):
             for i, chunk in enumerate(valid_chunks):
                 pid = chunk.get("id") or chunk.get("metadata", {}).get("id")
                 if not pid:
                     pid = str(len(offset_map) + i)
+                pid = str(pid)
                 chunk.setdefault("metadata", {})["id"] = pid
                 chunk["id"] = pid
             passage_ids = [c["id"] for c in valid_chunks]
-            try:
-                from leann_backend_ivf import add_vectors as ivf_add_vectors
-
-                ivf_add_vectors(str(path), embeddings, passage_ids)
-            except ImportError:
-                raise RuntimeError("IVF backend required. Install leann-backend-ivf.")
+            if native_index_backup is None:
+                native_index_backup = index_file.with_suffix(index_file.suffix + ".update.bak")
+                native_passages_backup = passages_file.with_suffix(
+                    passages_file.suffix + ".update.bak"
+                )
+                native_offset_backup = offset_file.with_suffix(offset_file.suffix + ".update.bak")
+                native_meta_backup = meta_path.with_suffix(meta_path.suffix + ".update.bak")
+                native_bm25_backup = (
+                    bm25_db_path.with_suffix(bm25_db_path.suffix + ".update.bak")
+                    if bm25_db_path and bm25_db_path.exists()
+                    else None
+                )
+                shutil.copy2(index_file, native_index_backup)
+                shutil.copy2(passages_file, native_passages_backup)
+                shutil.copy2(offset_file, native_offset_backup)
+                shutil.copy2(meta_path, native_meta_backup)
+                if native_bm25_backup and bm25_db_path:
+                    shutil.copy2(bm25_db_path, native_bm25_backup)
             rollback_passages_size = passages_file.stat().st_size if passages_file.exists() else 0
             offset_map_backup = offset_map.copy()
             try:
+                try:
+                    if backend_name == "ivf":
+                        from leann_backend_ivf import add_vectors as backend_add_vectors
+                    else:
+                        from leann_backend_flat import add_vectors as backend_add_vectors
+                except ImportError:
+                    raise RuntimeError(
+                        f"{backend_name} backend required. Install leann-backend-{backend_name}."
+                    )
+                backend_add_vectors(str(path), embeddings, passage_ids)
                 with open(passages_file, "a", encoding="utf-8") as f:
                     for chunk in valid_chunks:
                         off = f.tell()
@@ -1249,12 +1378,19 @@ class LeannBuilder:
                         offset_map[chunk["id"]] = off
                 with open(offset_file, "wb") as f:
                     pickle.dump(offset_map, f)
+                if bm25_db_path and bm25_db_path.exists():
+                    bm25 = Fts5BM25Index(str(bm25_db_path))
+                    try:
+                        bm25.add_documents(valid_chunks)
+                    finally:
+                        bm25.close()
                 meta["total_passages"] = len(offset_map)
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, indent=2)
                 logger.info(
-                    "Appended %d passages to IVF index '%s'. Total: %d",
+                    "Appended %d passages to %s index '%s'. Total: %d",
                     len(valid_chunks),
+                    backend_name.upper(),
                     index_path,
                     len(offset_map),
                 )
@@ -1265,7 +1401,10 @@ class LeannBuilder:
                 offset_map = offset_map_backup
                 with open(offset_file, "wb") as f:
                     pickle.dump(offset_map, f)
+                restore_native_backups()
                 raise
+            finally:
+                cleanup_native_backups()
             self.chunks.clear()
             return
 
@@ -1305,17 +1444,30 @@ class LeannBuilder:
         passage_meta_mode = meta.get("embedding_mode", self.embedding_mode)
         passage_provider_options = meta.get("embedding_options", self.embedding_options)
 
-        base_id = index.ntotal
         for offset, chunk in enumerate(valid_chunks):
-            new_id = str(base_id + offset)
-            chunk.setdefault("metadata", {})["id"] = new_id
-            chunk["id"] = new_id
+            passage_id = chunk.get("id") or chunk.get("metadata", {}).get("id")
+            if not passage_id:
+                passage_id = str(len(offset_map) + offset)
+            passage_id = str(passage_id)
+            chunk.setdefault("metadata", {})["id"] = passage_id
+            chunk["id"] = passage_id
 
         # Append passages/offsets before we attempt index.add so the ZMQ server
         # can resolve newly assigned IDs during recompute. Keep rollback hooks
         # so we can restore files if the update fails mid-way.
         rollback_passages_size = passages_file.stat().st_size if passages_file.exists() else 0
+        idmap_file = index_dir / f"{index_prefix}.ids.txt"
+        rollback_idmap_size = idmap_file.stat().st_size if idmap_file.exists() else 0
         offset_map_backup = offset_map.copy()
+        index_file_backup = index_file.with_suffix(index_file.suffix + ".update.bak")
+        bm25_backup = (
+            bm25_db_path.with_suffix(bm25_db_path.suffix + ".update.bak")
+            if bm25_db_path and bm25_db_path.exists()
+            else None
+        )
+        shutil.copy2(index_file, index_file_backup)
+        if bm25_backup and bm25_db_path:
+            shutil.copy2(bm25_db_path, bm25_backup)
 
         try:
             with open(passages_file, "a", encoding="utf-8") as f:
@@ -1335,6 +1487,9 @@ class LeannBuilder:
 
             with open(offset_file, "wb") as f:
                 pickle.dump(offset_map, f)
+            with open(idmap_file, "a", encoding="utf-8") as f:
+                for chunk in valid_chunks:
+                    f.write(str(chunk["id"]) + "\n")
 
             server_manager: Optional[EmbeddingServerManager] = None
             server_started = False
@@ -1378,6 +1533,12 @@ class LeannBuilder:
                 else:
                     index.add(embeddings.shape[0], faiss.swig_ptr(embeddings))
                 faiss.write_index(index, str(index_file))
+                if bm25_db_path and bm25_db_path.exists():
+                    bm25 = Fts5BM25Index(str(bm25_db_path))
+                    try:
+                        bm25.add_documents(valid_chunks)
+                    finally:
+                        bm25.close()
             finally:
                 if server_started and server_manager is not None:
                     server_manager.stop_server()
@@ -1390,7 +1551,19 @@ class LeannBuilder:
             offset_map = offset_map_backup
             with open(offset_file, "wb") as f:
                 pickle.dump(offset_map, f)
+            if idmap_file.exists():
+                with open(idmap_file, "rb+") as f:
+                    f.truncate(rollback_idmap_size)
+            if index_file_backup.exists():
+                shutil.copy2(index_file_backup, index_file)
+            if bm25_backup and bm25_backup.exists() and bm25_db_path:
+                shutil.copy2(bm25_backup, bm25_db_path)
             raise
+        finally:
+            if index_file_backup.exists():
+                index_file_backup.unlink()
+            if bm25_backup and bm25_backup.exists():
+                bm25_backup.unlink()
 
         meta["total_passages"] = len(offset_map)
         with open(meta_path, "w", encoding="utf-8") as f:
@@ -1424,7 +1597,10 @@ class LeannSearcher:
         raw_index_path = Path(index_path)
         if not raw_index_path.is_absolute() and len(raw_index_path.parts) == 1:
             local_index = Path.cwd() / ".leann" / "indexes" / index_path / "documents.leann"
-            if local_index.with_suffix(".leann.meta.json").exists() or Path(f"{local_index}.meta.json").exists():
+            if (
+                local_index.with_suffix(".leann.meta.json").exists()
+                or Path(f"{local_index}.meta.json").exists()
+            ):
                 index_path = str(local_index)
 
         # Fix path resolution for Colab and other environments
@@ -1472,9 +1648,7 @@ class LeannSearcher:
         # and-score path on no-recompute indexes. Explicit True/False wins.
         if recompute_embeddings is None:
             meta_kwargs = self.meta_data.get("backend_kwargs", {}) or {}
-            self.recompute_embeddings: bool = bool(
-                meta_kwargs.get("is_recompute", True)
-            )
+            self.recompute_embeddings: bool = bool(meta_kwargs.get("is_recompute", True))
         else:
             self.recompute_embeddings: bool = bool(recompute_embeddings)
 
@@ -1780,9 +1954,7 @@ class LeannSearcher:
                     else temporal_strict
                 )
                 for result in search_results:
-                    used_axis = resolve_temporal_axis(
-                        result.metadata, temporal_axis_routed, strict
-                    )
+                    used_axis = resolve_temporal_axis(result.metadata, temporal_axis_routed, strict)
                     if used_axis is None:
                         continue
                     if used_axis != temporal_axis_routed:
@@ -1907,7 +2079,9 @@ class LeannSearcher:
                     prefilter == "auto" and selectivity < prefilter_threshold
                 ):
                     logger.info("  Using brute-force scored prefilter path")
-                    filtered_matches = self.passage_manager.matching_filtered_subset(metadata_filters)
+                    filtered_matches = self.passage_manager.matching_filtered_subset(
+                        metadata_filters
+                    )
                     backend_supports_stored = (
                         not effective_recompute
                         and hasattr(self.backend_impl, "score_passage_ids")
@@ -1984,6 +2158,7 @@ class LeannSearcher:
             logger.info(f"  🌟 Hybrid search enabled with vector_weight={vector_weight}")
             bm25_weight = 1.0 - vector_weight
             bm25_results = self._bm25_search(query, top_k)
+
             # Min-max normalize each source to [0,1] BEFORE fusing. Vector scores
             # (cosine/IP, ~[0,1]) and FTS5 bm25() scores live on different,
             # incomparable scales (bm25() is unbounded, often 2-15), so a raw

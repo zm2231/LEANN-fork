@@ -13,6 +13,19 @@ from typing import Any, Optional, Protocol, cast
 
 import numpy as np
 
+from .embedding_cache import (
+    build_cache_config,
+    cache_enabled,
+    cache_key,
+    canonicalize_text,
+    resolve_model_revision,
+)
+from .embedding_cache import (
+    get_many as cache_get_many,
+)
+from .embedding_cache import (
+    put_many as cache_put_many,
+)
 from .settings import resolve_ollama_host, resolve_openai_api_key, resolve_openai_base_url
 
 # torch and tiktoken are imported lazily inside the functions that use them, so
@@ -479,6 +492,147 @@ def compute_embeddings(
         batch_size = provider_options["batch_size"]
         adaptive_optimization = False  # User-specified batch_size takes precedence
 
+    prompt_template = provider_options.get("build_prompt_template") or provider_options.get(
+        "prompt_template"
+    )
+    applied_prompt_template = None
+    prepared_texts = [canonicalize_text(text) for text in texts]
+    if mode in {"openai", "ollama"} and prompt_template:
+        logger.warning(f"Applying prompt template: '{prompt_template}'")
+        prepared_texts = [canonicalize_text(f"{prompt_template}{text}") for text in prepared_texts]
+        applied_prompt_template = prompt_template
+
+    effective_provider_options = dict(provider_options)
+    cache_provider = ""
+    truncation_config: dict[str, Any] = {}
+    if mode == "openai":
+        effective_base_url = provider_options.get("base_url")
+        cache_provider = resolve_openai_base_url(effective_base_url) or ""
+        prepared_texts = truncate_for_model(prepared_texts, model_name, base_url=effective_base_url)
+        effective_provider_options["_leann_texts_prepared"] = True
+        truncation_config = {
+            "token_limit": get_model_token_limit(model_name, base_url=effective_base_url),
+            "strategy": "truncate_for_model",
+        }
+    elif mode == "ollama":
+        resolved_host = resolve_ollama_host(provider_options.get("host"))
+        cache_provider = resolved_host
+        prepared_texts = truncate_for_model(prepared_texts, model_name, base_url=resolved_host)
+        effective_provider_options["_leann_texts_prepared"] = True
+        truncation_config = {
+            "token_limit": get_model_token_limit(model_name, base_url=resolved_host),
+            "strategy": "truncate_for_model",
+        }
+    elif mode == "mlx":
+        prepared_texts = truncate_for_model(prepared_texts, model_name)
+        truncation_config = {
+            "token_limit": get_model_token_limit(model_name),
+            "strategy": "truncate_for_model",
+        }
+    elif mode == "sentence-transformers":
+        truncation_config = {"manual_tokenize": manual_tokenize}
+        if manual_tokenize:
+            truncation_config["max_length"] = max_length
+
+    if is_build and cache_enabled() and prepared_texts:
+        config = build_cache_config(
+            mode=mode,
+            model_name=model_name,
+            provider=cache_provider,
+            dimensions=provider_options.get("_leann_dimensions"),
+            normalization="none",
+            truncation=truncation_config,
+            prompt_template=applied_prompt_template,
+            model_rev=resolve_model_revision(
+                mode=mode,
+                model_name=model_name,
+                provider=cache_provider,
+                api_key=provider_options.get("api_key"),
+            ),
+        )
+        keys = [cache_key(config, text) for text in prepared_texts]
+        hits = cache_get_many(keys)
+        missing_positions = [i for i, key in enumerate(keys) if key not in hits]
+        if not missing_positions:
+            logger.info("Embedding cache hit: %d/%d", len(texts), len(texts))
+            return np.vstack([hits[key] for key in keys]).astype(np.float32, copy=False)
+
+        unique_missing_positions: list[int] = []
+        seen_missing_keys: set[str] = set()
+        for pos in missing_positions:
+            key = keys[pos]
+            if key in seen_missing_keys:
+                continue
+            seen_missing_keys.add(key)
+            unique_missing_positions.append(pos)
+
+        logger.info(
+            "Embedding cache: %d hit(s), %d miss(es)",
+            len(texts) - len(missing_positions),
+            len(unique_missing_positions),
+        )
+        missing_texts = [prepared_texts[i] for i in unique_missing_positions]
+        missing_embeddings = _compute_embeddings_uncached(
+            missing_texts,
+            model_name,
+            mode,
+            is_build=is_build,
+            batch_size=batch_size,
+            adaptive_optimization=adaptive_optimization,
+            manual_tokenize=manual_tokenize,
+            max_length=max_length,
+            provider_options=effective_provider_options,
+            wrapper_start_time=wrapper_start_time,
+        )
+        cache_put_many(
+            [(keys[pos], missing_embeddings[j]) for j, pos in enumerate(unique_missing_positions)],
+            config=config,
+        )
+        rows: list[np.ndarray] = []
+        miss_by_position = {
+            pos: missing_embeddings[j] for j, pos in enumerate(unique_missing_positions)
+        }
+        miss_by_key = {
+            keys[pos]: missing_embeddings[j] for j, pos in enumerate(unique_missing_positions)
+        }
+        for i, key in enumerate(keys):
+            if key in hits:
+                rows.append(hits[key])
+            elif i in miss_by_position:
+                rows.append(miss_by_position[i])
+            else:
+                rows.append(miss_by_key[key])
+        return np.vstack(rows).astype(np.float32, copy=False)
+
+    return _compute_embeddings_uncached(
+        prepared_texts,
+        model_name,
+        mode,
+        is_build=is_build,
+        batch_size=batch_size,
+        adaptive_optimization=adaptive_optimization,
+        manual_tokenize=manual_tokenize,
+        max_length=max_length,
+        provider_options=effective_provider_options,
+        wrapper_start_time=wrapper_start_time,
+    )
+
+
+def _compute_embeddings_uncached(
+    texts: list[str],
+    model_name: str,
+    mode: str,
+    *,
+    is_build: bool,
+    batch_size: int,
+    adaptive_optimization: bool,
+    manual_tokenize: bool,
+    max_length: int,
+    provider_options: dict[str, Any],
+    wrapper_start_time: float,
+) -> np.ndarray:
+    """Compute embeddings after canonicalization/cache handling."""
+
     if mode == "sentence-transformers":
         inner_start_time = time.time()
         result = compute_embeddings_sentence_transformers(
@@ -920,18 +1074,19 @@ def compute_embeddings_openai(
         f"Computing embeddings for {len(texts)} texts using OpenAI API, model: '{model_name}'"
     )
 
-    # Apply prompt template if provided
-    # Priority: build_prompt_template (new format) > prompt_template (old format)
-    prompt_template = provider_options.get("build_prompt_template") or provider_options.get(
-        "prompt_template"
-    )
+    if not provider_options.get("_leann_texts_prepared"):
+        # Apply prompt template if provided
+        # Priority: build_prompt_template (new format) > prompt_template (old format)
+        prompt_template = provider_options.get("build_prompt_template") or provider_options.get(
+            "prompt_template"
+        )
 
-    if prompt_template:
-        logger.warning(f"Applying prompt template: '{prompt_template}'")
-        texts = [f"{prompt_template}{text}" for text in texts]
+        if prompt_template:
+            logger.warning(f"Applying prompt template: '{prompt_template}'")
+            texts = [f"{prompt_template}{text}" for text in texts]
 
-    # Clip to the model's real token limit before sending (client-side guard).
-    texts = truncate_for_model(texts, model_name, base_url=effective_base_url)
+        # Clip to the model's real token limit before sending (client-side guard).
+        texts = truncate_for_model(texts, model_name, base_url=effective_base_url)
 
     # OpenAI has limits on batch size and input length
     max_batch_size = 800  # Conservative batch size because the token limit is 300K
@@ -1295,19 +1450,20 @@ def compute_embeddings_ollama(
 
     logger.info(f"Using batch size: {batch_size} for true batch processing")
 
-    # Apply prompt template if provided
     provider_options = provider_options or {}
-    # Priority: build_prompt_template (new format) > prompt_template (old format)
-    prompt_template = provider_options.get("build_prompt_template") or provider_options.get(
-        "prompt_template"
-    )
+    if not provider_options.get("_leann_texts_prepared"):
+        # Apply prompt template if provided
+        # Priority: build_prompt_template (new format) > prompt_template (old format)
+        prompt_template = provider_options.get("build_prompt_template") or provider_options.get(
+            "prompt_template"
+        )
 
-    if prompt_template:
-        logger.warning(f"Applying prompt template: '{prompt_template}'")
-        texts = [f"{prompt_template}{text}" for text in texts]
+        if prompt_template:
+            logger.warning(f"Applying prompt template: '{prompt_template}'")
+            texts = [f"{prompt_template}{text}" for text in texts]
 
-    # Clip to the model's real token limit before batching (client-side guard).
-    texts = truncate_for_model(texts, model_name, base_url=resolved_host)
+        # Clip to the model's real token limit before batching (client-side guard).
+        texts = truncate_for_model(texts, model_name, base_url=resolved_host)
 
     def get_batch_embeddings(batch_texts):
         """Get embeddings for a batch of texts using /api/embed endpoint."""

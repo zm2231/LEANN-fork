@@ -10,6 +10,8 @@ requires-python = ">=3.10"
 dependencies = [
     "leann-core",
     "leann-backend-hnsw",
+    "leann-backend-ivf",
+    "leann-backend-flat",
     "typer>=0.12.3",
     "numpy>=1.26.0",
     "torch",
@@ -87,7 +89,9 @@ wechat-exporter = "wechat_exporter.main:main"
 [tool.uv.sources]
 leann-core = { path = "packages/leann-core", editable = true }
 leann-backend-diskann = { path = "packages/leann-backend-diskann", editable = true }
+leann-backend-flat = { path = "packages/leann-backend-flat", editable = true }
 leann-backend-hnsw = { path = "packages/leann-backend-hnsw", editable = true }
+leann-backend-ivf = { path = "packages/leann-backend-ivf", editable = true }
 astchunk = { path = "packages/astchunk-leann", editable = true }
 
 [dependency-groups]

@@ -20,7 +20,7 @@ from llama_index.core import SimpleDirectoryReader
 from llama_index.core.node_parser import SentenceSplitter
 from tqdm import tqdm
 
-from .api import LeannBuilder, LeannChat, LeannSearcher
+from .api import Fts5BM25Index, LeannBuilder, LeannChat, LeannSearcher
 from .embedding_server_manager import EmbeddingServerManager
 from .interactive_utils import create_cli_session
 from .registry import register_project_directory
@@ -37,6 +37,8 @@ from .sync import FileSynchronizer
 logger = logging.getLogger(__name__)
 
 BUILD_CONFIG_VERSION = 1
+JSONL_ROWHASH_VERSION = 1
+JSONL_ROWHASH_VOLATILE_METADATA_FIELDS = frozenset({"indexed_at"})
 
 BUILD_DEFAULTS: dict[str, Any] = {
     "backend_name": "hnsw",
@@ -54,6 +56,7 @@ BUILD_DEFAULTS: dict[str, Any] = {
     "recompute": True,
     "file_types": None,
     "include_hidden": False,
+    "top_folder_depth": 1,
     "doc_chunk_size": 256,
     "doc_chunk_overlap": 128,
     "code_chunk_size": 512,
@@ -85,6 +88,7 @@ BUILD_OPTION_FIELDS: dict[str, str] = {
     "--file-types": "file_types",
     "--include-hidden": "include_hidden",
     "--no-include-hidden": "include_hidden",
+    "--top-folder-depth": "top_folder_depth",
     "--doc-chunk-size": "doc_chunk_size",
     "--doc-chunk-overlap": "doc_chunk_overlap",
     "--code-chunk-size": "code_chunk_size",
@@ -143,6 +147,53 @@ def _filesystem_temporal_metadata(metadata: dict[str, Any]) -> dict[str, str]:
             stat_result.st_mtime, tz=timezone.utc
         ).isoformat()
     return temporal_metadata
+
+
+def _docs_source_roots(docs_paths: list[str]) -> list[Path]:
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for docs_path in docs_paths:
+        path = Path(docs_path).resolve()
+        root = path if path.is_dir() else path.parent
+        key = str(root)
+        if key not in seen:
+            seen.add(key)
+            roots.append(root)
+    return roots
+
+
+def _filesystem_folder_metadata(
+    metadata: dict[str, Any], source_roots: list[Path], top_folder_depth: int = 1
+) -> dict[str, str]:
+    """Return factual path metadata for filtering docs builds by folder."""
+    file_path = metadata.get("file_path") or metadata.get("source")
+    if not file_path:
+        return {}
+
+    path = Path(str(file_path)).resolve()
+    best_root: Path | None = None
+    best_relative: Path | None = None
+    for root in source_roots:
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        if best_root is None or len(root.parts) > len(best_root.parts):
+            best_root = root
+            best_relative = relative
+
+    if best_root is None or best_relative is None:
+        return {}
+
+    folder_path = "" if best_relative.parent == Path(".") else best_relative.parent.as_posix()
+    depth = max(1, int(top_folder_depth))
+    top_folder = best_relative.parts[depth - 1] if len(best_relative.parts) > depth else ""
+    return {
+        "source_root": str(best_root),
+        "relative_path": best_relative.as_posix(),
+        "folder_path": folder_path,
+        "top_folder": top_folder,
+    }
 
 
 def _calendar_timestamp_expr(columns: set[str], candidates: tuple[str, ...]) -> str:
@@ -367,7 +418,7 @@ Examples:
             "--backend-name",
             type=str,
             default="hnsw",
-            choices=["hnsw", "diskann", "ivf"],
+            choices=["hnsw", "diskann", "ivf", "flat"],
             help="Backend to use (default: hnsw)",
         )
         build_parser.add_argument(
@@ -459,6 +510,15 @@ Examples:
             help="Include hidden files and directories (paths starting with '.') during indexing (default: false)",
         )
         build_parser.add_argument(
+            "--top-folder-depth",
+            type=int,
+            default=1,
+            help=(
+                "Path segment depth to store in metadata.top_folder for docs builds "
+                "(1 = first folder under --docs, 2 = second folder, default: 1)"
+            ),
+        )
+        build_parser.add_argument(
             "--doc-chunk-size",
             type=int,
             default=256,
@@ -533,10 +593,15 @@ Examples:
             help="Optional field containing stable passage id (default: id)",
         )
         jsonl_parser.add_argument(
+            "--incremental-by-id",
+            action="store_true",
+            help="Diff JSONL rows by stable id and re-embed only new or changed rows.",
+        )
+        jsonl_parser.add_argument(
             "--backend-name",
             type=str,
             default="hnsw",
-            choices=["hnsw", "diskann", "ivf"],
+            choices=["hnsw", "diskann", "ivf", "flat"],
             help="Backend to use (default: hnsw)",
         )
         jsonl_parser.add_argument(
@@ -1209,10 +1274,9 @@ Examples:
 
         # Add current project if it has .leann but not in registry
         current_has_cli_indexes = (current_path / ".leann" / "indexes").exists()
-        if (
-            (current_has_cli_indexes or refresh)
-            and str(current_resolved) not in valid_project_resolved
-        ):
+        if (current_has_cli_indexes or refresh) and str(
+            current_resolved
+        ) not in valid_project_resolved:
             valid_projects.append(current_path)
             valid_project_resolved.add(str(current_resolved))
 
@@ -1255,11 +1319,12 @@ Examples:
         # --refresh this stays bounded to .leann/indexes and never recursively
         # scans broad dirs like ~.
         _current_path_str = str(current_resolved)
-        _current_is_project = (
-            (current_path / ".leann" / "indexes").exists()
-            or (refresh and _current_path_str in all_project_resolved)
+        _current_is_project = (current_path / ".leann" / "indexes").exists() or (
+            refresh and _current_path_str in all_project_resolved
         )
-        current_indexes = _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
+        current_indexes = (
+            _get_indexes(current_path, exclude=other_projects) if _current_is_project else []
+        )
         if current_indexes:
             for idx in current_indexes:
                 total_indexes += 1
@@ -1299,7 +1364,8 @@ Examples:
         else:
             # Count only projects that have at least one discoverable index (use cache)
             projects_count = sum(
-                1 for p in valid_projects
+                1
+                for p in valid_projects
                 if len(_get_indexes(p, exclude=other_projects if p == current_path else None)) > 0
             )
             print(f"📊 Total: {total_indexes} indexes across {projects_count} projects")
@@ -1452,13 +1518,25 @@ Examples:
         # 2. Apps format: *.leann.meta.json files anywhere in the project
         cli_indexes_dir = project_path / ".leann" / "indexes"
         _SKIP_DIRS = {
-            "node_modules", ".git", "__pycache__", ".venv", "venv",
-            ".next", "dist", "build", ".tox", ".eggs", "target",
-            ".worktrees", ".cache", ".leann",
+            "node_modules",
+            ".git",
+            "__pycache__",
+            ".venv",
+            "venv",
+            ".next",
+            "dist",
+            "build",
+            ".tox",
+            ".eggs",
+            "target",
+            ".worktrees",
+            ".cache",
+            ".leann",
         }
 
         def _walk_meta_files(root: Path):
             import os as _os
+
             for dirpath, dirnames, filenames in _os.walk(root):
                 dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
                 for fname in filenames:
@@ -2404,32 +2482,20 @@ Examples:
             num_threads=args.num_threads,
         )
 
-    def _incremental_add_only(
-        self,
-        index_path: str,
-        all_texts: list[dict],
-        args,
-        new_paths: set[str],
-    ) -> bool:
-        """Add-only incremental update (works for HNSW and IVF)."""
-        new_chunks = self._chunks_for_paths(all_texts, new_paths)
-        if not new_chunks:
-            return False
-        self._assign_chunk_ids(new_chunks)
-        builder = self._make_incremental_builder(args)
-        for chunk in new_chunks:
-            builder.add_text(chunk["text"], metadata=chunk["metadata"])
-        print(
-            f"Incremental update: adding {len(new_chunks)} chunks from {len(new_paths)} new file(s)..."
-        )
-        builder.update_index(index_path)
-        print(f"Index updated at {index_path}")
-        return True
+    def _stamp_docs_build_metadata(self, chunks: list[dict], docs_paths: list[str], args) -> None:
+        indexed_at = datetime.now(timezone.utc).isoformat()
+        source_roots = _docs_source_roots(docs_paths)
+        top_folder_depth = max(1, int(getattr(args, "top_folder_depth", 1)))
+        for chunk in chunks:
+            metadata = chunk.setdefault("metadata", {})
+            metadata.update(_filesystem_folder_metadata(metadata, source_roots, top_folder_depth))
+            metadata.update(_filesystem_temporal_metadata(metadata))
+            metadata["indexed_at"] = indexed_at
 
-    def _incremental_ivf_remove_only(
+    def _incremental_native_remove_only(
         self, index_path: str, index_dir: Path, removed_paths: set[str], args
     ) -> bool:
-        """IVF remove-only fast path: remove chunk IDs without loading or chunking documents."""
+        """Native remove-only fast path: remove chunk IDs without loading or chunking documents."""
         passages_file = index_dir / "documents.leann.passages.jsonl"
         if not passages_file.exists():
             return False
@@ -2451,7 +2517,8 @@ Examples:
         if not ids_to_remove:
             return False
         print(
-            f"Incremental IVF update (-{len(removed_paths)} removed): removing {len(ids_to_remove)} old chunks..."
+            "Incremental native update "
+            f"(-{len(removed_paths)} removed): removing {len(ids_to_remove)} old chunks..."
         )
         builder = self._make_incremental_builder(args)
         builder.update_index(index_path, remove_passage_ids=ids_to_remove)
@@ -2467,7 +2534,7 @@ Examples:
                 keys.append(candidate)
         return keys
 
-    def _incremental_ivf_update(
+    def _incremental_native_update(
         self,
         index_path: str,
         index_dir: Path,
@@ -2478,7 +2545,7 @@ Examples:
         modified_paths: set[str],
         sync_roots: list[str],
     ) -> bool:
-        """IVF incremental update: remove old chunks for modified/removed files, add new chunks."""
+        """Native incremental update: remove old chunks for modified/removed files, add new chunks."""
         passages_file = index_dir / "documents.leann.passages.jsonl"
         offset_file = index_dir / "documents.leann.passages.idx"
         live_ids: set[str] | None = None
@@ -2531,7 +2598,7 @@ Examples:
             file_parts.append(f"~{len(modified_paths)} modified")
         if removed_paths:
             file_parts.append(f"-{len(removed_paths)} removed")
-        print(f"Incremental IVF update ({', '.join(file_parts)}): {', '.join(parts)}...")
+        print(f"Incremental native update ({', '.join(file_parts)}): {', '.join(parts)}...")
 
         builder.update_index(
             index_path, remove_passage_ids=ids_to_remove if ids_to_remove else None
@@ -2556,7 +2623,7 @@ Examples:
             return
 
         blockers = []
-        if meta.get("backend_name") not in ("hnsw", "ivf"):
+        if meta.get("backend_name") not in ("hnsw", "ivf", "flat"):
             blockers.append(
                 f"backend '{meta.get('backend_name')}' does not support incremental updates"
             )
@@ -2649,7 +2716,7 @@ Examples:
             "build_preset": getattr(args, "build_preset", None),
         }
         for key in BUILD_CONFIG_FIELDS:
-            config[key] = getattr(args, key)
+            config[key] = self._build_config_arg(args, key)
         return config
 
     def _make_jsonl_build_config(self, args) -> dict[str, Any]:
@@ -2661,11 +2728,18 @@ Examples:
             "text_field": args.text_field,
             "metadata_field": args.metadata_field,
             "id_field": args.id_field,
+            "incremental_by_id": bool(getattr(args, "incremental_by_id", False)),
             "build_preset": getattr(args, "build_preset", None),
         }
         for key in BUILD_CONFIG_FIELDS:
-            config[key] = getattr(args, key)
+            config[key] = self._build_config_arg(args, key)
         return config
+
+    def _build_config_arg(self, args, key: str) -> Any:
+        try:
+            return getattr(args, key)
+        except AttributeError:
+            return BUILD_DEFAULTS[key]
 
     def _write_build_config(self, index_dir: Path, args, docs_paths: list[str]) -> None:
         meta_path = index_dir / "documents.leann.meta.json"
@@ -2730,6 +2804,16 @@ Examples:
                     )
 
                 row_id = raw.get(args.id_field) if args.id_field else None
+                metadata_id = metadata.get("id")
+                if (
+                    getattr(args, "incremental_by_id", False)
+                    and row_id not in (None, "")
+                    and metadata_id not in (None, "")
+                    and str(row_id) != str(metadata_id)
+                ):
+                    raise ValueError(
+                        f"{input_path}:{line_no}: field '{args.id_field}' conflicts with metadata.id"
+                    )
                 if row_id not in (None, ""):
                     row_id = str(row_id)
                     metadata.setdefault("id", row_id)
@@ -2739,7 +2823,322 @@ Examples:
 
         if not rows:
             raise ValueError(f"No rows found in JSONL input: {input_path}")
+        if getattr(args, "incremental_by_id", False):
+            seen_ids: set[str] = set()
+            for idx, row in enumerate(rows, 1):
+                row_id = row.get("id")
+                if row_id in (None, ""):
+                    raise ValueError(
+                        f"{input_path}:{idx}: --incremental-by-id requires a stable row id"
+                    )
+                row_id = str(row_id)
+                row["id"] = row_id
+                row["metadata"]["id"] = row_id
+                row["metadata"].setdefault("source_document_id", row_id)
+                if row_id in seen_ids:
+                    raise ValueError(f"{input_path}:{idx}: duplicate row id '{row_id}'")
+                seen_ids.add(row_id)
         return rows
+
+    def _jsonl_rowhash_path(self, index_dir: Path) -> Path:
+        return index_dir / "documents.leann.rowhashes.json"
+
+    def _canonical_jsonl_metadata(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(k): self._canonical_jsonl_metadata(v)
+                for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+                if str(k) not in JSONL_ROWHASH_VOLATILE_METADATA_FIELDS
+            }
+        if isinstance(value, list):
+            return [self._canonical_jsonl_metadata(v) for v in value]
+        return value
+
+    def _jsonl_row_hash(self, row: dict[str, Any]) -> str:
+        payload = {
+            "text": row["text"],
+            "metadata": self._canonical_jsonl_metadata(row.get("metadata") or {}),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _jsonl_hashes_by_id(self, rows: list[dict[str, Any]]) -> dict[str, str]:
+        return {str(row["id"]): self._jsonl_row_hash(row) for row in rows}
+
+    def _jsonl_rows_by_id(self, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {str(row["id"]): row for row in rows}
+
+    def _load_jsonl_rowhashes(self, index_dir: Path) -> Optional[dict[str, str]]:
+        path = self._jsonl_rowhash_path(index_dir)
+        if not path.exists():
+            return None
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("version") != JSONL_ROWHASH_VERSION or not isinstance(data.get("rows"), dict):
+            return None
+        return {str(k): str(v) for k, v in data["rows"].items()}
+
+    def _write_jsonl_rowhashes(self, index_dir: Path, hashes: dict[str, str]) -> None:
+        path = self._jsonl_rowhash_path(index_dir)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        payload = {"version": JSONL_ROWHASH_VERSION, "rows": dict(sorted(hashes.items()))}
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+        tmp_path.replace(path)
+
+    def _load_jsonl_offset_ids(self, index_dir: Path) -> set[str]:
+        offset_file = index_dir / "documents.leann.passages.idx"
+        with open(offset_file, "rb") as f:
+            return {str(pid) for pid in pickle.load(f).keys()}
+
+    def _load_jsonl_live_passages(self, index_dir: Path) -> list[dict[str, Any]]:
+        passages_file = index_dir / "documents.leann.passages.jsonl"
+        passages: list[dict[str, Any]] = []
+        with open(passages_file, encoding="utf-8") as f:
+            for line_no, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"{passages_file}:{line_no}: invalid passage JSON: {exc}"
+                    ) from exc
+                passage_id = data.get("id")
+                if passage_id is None:
+                    raise ValueError(f"{passages_file}:{line_no}: missing passage id")
+                passages.append(
+                    {
+                        "id": str(passage_id),
+                        "text": data.get("text", ""),
+                        "metadata": data.get("metadata") or {},
+                    }
+                )
+        return passages
+
+    def _jsonl_incremental_drift_reason(
+        self, index_dir: Path, meta: dict[str, Any], rowhashes: dict[str, str]
+    ) -> Optional[str]:
+        try:
+            offset_ids = self._load_jsonl_offset_ids(index_dir)
+            live_passages = self._load_jsonl_live_passages(index_dir)
+        except Exception as exc:
+            return f"could not read passage state: {exc}"
+
+        live_passage_ids = [passage["id"] for passage in live_passages]
+        rowhash_ids = set(rowhashes.keys())
+        if len(live_passage_ids) != len(set(live_passage_ids)):
+            return "passages.jsonl contains duplicate passage ids"
+        if offset_ids != set(live_passage_ids):
+            return "passages.idx and passages.jsonl ids differ"
+        if offset_ids != rowhash_ids:
+            return "rowhash sidecar ids differ from passage ids"
+        if int(meta.get("total_passages", -1)) != len(offset_ids):
+            return "meta total_passages differs from passage count"
+
+        bm25_db_name = meta.get("bm25_db")
+        if bm25_db_name:
+            bm25_db_path = index_dir / bm25_db_name
+            if not bm25_db_path.exists():
+                return "BM25 sidecar is missing"
+            bm25 = Fts5BM25Index(str(bm25_db_path))
+            try:
+                bm25_documents = bm25.documents()
+                if len(bm25_documents) != len(offset_ids):
+                    return "BM25 sidecar row count differs from passage count"
+                if len({doc["id"] for doc in bm25_documents}) != len(bm25_documents):
+                    return "BM25 sidecar contains duplicate ids"
+                live_text_hashes = {
+                    passage["id"]: hashlib.sha256(
+                        str(passage.get("text", "")).encode("utf-8")
+                    ).hexdigest()
+                    for passage in live_passages
+                }
+                bm25_text_hashes = {
+                    doc["id"]: hashlib.sha256(doc["text"].encode("utf-8")).hexdigest()
+                    for doc in bm25_documents
+                }
+                if bm25_text_hashes != live_text_hashes:
+                    return "BM25 sidecar documents differ from passages.jsonl"
+            finally:
+                bm25.close()
+
+        if meta.get("backend_name") == "hnsw":
+            idmap_file = index_dir / "documents.ids.txt"
+            if not idmap_file.exists():
+                return "HNSW id map is missing"
+            idmap_ids = idmap_file.read_text(encoding="utf-8").splitlines()
+            if len(idmap_ids) != len(offset_ids):
+                return "HNSW id map count differs from passage count"
+            if idmap_ids != live_passage_ids:
+                return "HNSW id map order differs from passages.jsonl"
+            index_file = index_dir / "documents.index"
+            if not index_file.exists():
+                return "HNSW native index is missing"
+            try:
+                from leann_backend_hnsw import faiss
+
+                index = faiss.read_index(str(index_file))
+                if int(index.ntotal) != len(offset_ids):
+                    return "HNSW native index count differs from passage count"
+            except Exception as exc:
+                return f"could not read HNSW native index: {exc}"
+
+        return None
+
+    def _add_jsonl_rows_to_builder(
+        self, builder: "LeannBuilder", rows: list[dict[str, Any]]
+    ) -> None:
+        indexed_at = datetime.now(timezone.utc).isoformat()
+        for row in rows:
+            metadata = dict(row["metadata"])
+            metadata.setdefault("indexed_at", indexed_at)
+            builder.add_text(row["text"], metadata=metadata)
+
+    def _finish_jsonl_build(
+        self,
+        index_dir: Path,
+        input_path: Path,
+        args,
+        synchronizers: list[FileSynchronizer],
+        rowhashes: Optional[dict[str, str]] = None,
+    ) -> None:
+        for fs in synchronizers:
+            fs.create_snapshot()
+        self._write_sync_config(
+            index_dir,
+            [str(input_path.parent)],
+            [input_path.suffix] if input_path.suffix else None,
+            None,
+        )
+        self._write_jsonl_build_config(index_dir, args)
+        if rowhashes is not None:
+            self._write_jsonl_rowhashes(index_dir, rowhashes)
+        self.register_project_dir()
+
+    def _full_build_jsonl_index(
+        self,
+        index_path: str,
+        index_dir: Path,
+        input_path: Path,
+        args,
+        rows: list[dict[str, Any]],
+        synchronizers: list[FileSynchronizer],
+    ) -> None:
+        print(f"Building JSONL index '{args.index_name}' with {args.backend_name} backend...")
+        builder = LeannBuilder(
+            backend_name=args.backend_name,
+            embedding_model=args.embedding_model,
+            embedding_mode=args.embedding_mode,
+            embedding_options=self._build_embedding_options(args) or None,
+            graph_degree=args.graph_degree,
+            complexity=args.complexity,
+            is_compact=args.compact,
+            is_recompute=args.recompute,
+            num_threads=args.num_threads,
+        )
+        self._add_jsonl_rows_to_builder(builder, rows)
+        builder.build_index(index_path)
+        rowhashes = (
+            self._jsonl_hashes_by_id(rows) if getattr(args, "incremental_by_id", False) else None
+        )
+        self._finish_jsonl_build(index_dir, input_path, args, synchronizers, rowhashes)
+        print(f"Index built at {index_path}")
+
+    def _try_incremental_jsonl_by_id(
+        self,
+        index_path: str,
+        index_dir: Path,
+        input_path: Path,
+        args,
+        rows: list[dict[str, Any]],
+        synchronizers: list[FileSynchronizer],
+    ) -> bool:
+        meta_path = index_dir / "documents.leann.meta.json"
+        if args.force or not meta_path.exists():
+            return False
+
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+            stored_build_config = meta.get("build_config")
+            current_build_config = self._make_jsonl_build_config(args)
+            if stored_build_config != current_build_config:
+                print("JSONL build settings changed; rebuilding index.")
+                return False
+
+            old_hashes = self._load_jsonl_rowhashes(index_dir)
+            if old_hashes is None:
+                print("JSONL rowhash sidecar missing or invalid; rebuilding index.")
+                return False
+            drift_reason = self._jsonl_incremental_drift_reason(index_dir, meta, old_hashes)
+            if drift_reason:
+                print(f"JSONL incremental state drift detected ({drift_reason}); rebuilding index.")
+                return False
+
+            new_hashes = self._jsonl_hashes_by_id(rows)
+            old_ids = set(old_hashes)
+            new_ids = set(new_hashes)
+            added_ids = sorted(new_ids - old_ids)
+            removed_ids = sorted(old_ids - new_ids)
+            changed_ids = sorted(
+                pid for pid in old_ids & new_ids if old_hashes[pid] != new_hashes[pid]
+            )
+
+            if not added_ids and not removed_ids and not changed_ids:
+                print("Index up to date.")
+                self._finish_jsonl_build(index_dir, input_path, args, synchronizers, old_hashes)
+                return True
+
+            backend_name = meta.get("backend_name")
+            is_compact = meta.get(
+                "is_compact", meta.get("backend_kwargs", {}).get("is_compact", True)
+            )
+            same_embedding = (
+                meta.get("embedding_model") == args.embedding_model
+                and meta.get("embedding_mode") == args.embedding_mode
+            )
+            rows_by_id = self._jsonl_rows_by_id(rows)
+
+            if backend_name == "hnsw":
+                if is_compact or meta.get("is_pruned"):
+                    print(
+                        "HNSW index does not support this in-place update mode; rebuilding index."
+                    )
+                    return False
+                if removed_ids or changed_ids:
+                    print("HNSW JSONL rows changed or were removed; rebuilding index.")
+                    return False
+                builder = self._make_incremental_builder(args)
+                self._add_jsonl_rows_to_builder(builder, [rows_by_id[pid] for pid in added_ids])
+                print(f"Incremental JSONL HNSW add: adding {len(added_ids)} row(s)...")
+                builder.update_index(index_path)
+                self._finish_jsonl_build(index_dir, input_path, args, synchronizers, new_hashes)
+                print(f"Index updated at {index_path}")
+                return True
+
+            if backend_name in ("ivf", "flat") and same_embedding:
+                builder = self._make_incremental_builder(args)
+                rows_to_add = [rows_by_id[pid] for pid in [*added_ids, *changed_ids]]
+                self._add_jsonl_rows_to_builder(builder, rows_to_add)
+                ids_to_remove = [*removed_ids, *changed_ids]
+                print(
+                    f"Incremental JSONL {backend_name.upper()} update: "
+                    f"adding {len(rows_to_add)} row(s), removing {len(ids_to_remove)} row(s)..."
+                )
+                builder.update_index(index_path, remove_passage_ids=ids_to_remove or None)
+                self._finish_jsonl_build(index_dir, input_path, args, synchronizers, new_hashes)
+                print(f"Index updated at {index_path}")
+                return True
+
+            print(
+                "JSONL index backend/config does not support row-level incremental update; rebuilding index."
+            )
+            return False
+        except Exception as exc:
+            print(f"Warning: Could not apply incremental JSONL-by-id update: {exc}")
+            return False
 
     def _load_sync_roots(self, index_dir: Path) -> list[str]:
         """Load sync roots from index dir (for path resolution in incremental updates)."""
@@ -2844,7 +3243,9 @@ Examples:
             id_field = build_config.get("id_field")
             if id_field is not None:
                 build_args_list.extend(["--id-field", str(id_field)])
-            self._append_build_config_options(build_args_list, build_config)
+            if build_config.get("incremental_by_id"):
+                build_args_list.append("--incremental-by-id")
+            self._append_build_config_options(build_args_list, build_config, source_kind="jsonl")
             if force:
                 build_args_list.append("--force")
             return build_args_list
@@ -2853,20 +3254,24 @@ Examples:
         if not docs:
             return None
         build_args_list = ["build", index_name, "--docs", *[str(p) for p in docs]]
-        self._append_build_config_options(build_args_list, build_config)
+        self._append_build_config_options(build_args_list, build_config, source_kind="docs")
         if force:
             build_args_list.append("--force")
         return build_args_list
 
     def _append_build_config_options(
-        self, build_args_list: list[str], build_config: dict[str, Any]
+        self,
+        build_args_list: list[str],
+        build_config: dict[str, Any],
+        *,
+        source_kind: str,
     ) -> None:
         def add_value(key: str) -> None:
             value = build_config.get(key)
             if value is not None:
                 build_args_list.extend([f"--{key.replace('_', '-')}", str(value)])
 
-        for key in (
+        shared_value_keys = (
             "backend_name",
             "embedding_model",
             "embedding_mode",
@@ -2878,24 +3283,32 @@ Examples:
             "graph_degree",
             "complexity",
             "num_threads",
+        )
+        docs_value_keys = (
             "file_types",
+            "top_folder_depth",
             "doc_chunk_size",
             "doc_chunk_overlap",
             "code_chunk_size",
             "code_chunk_overlap",
             "ast_chunk_size",
             "ast_chunk_overlap",
+        )
+        for key in (
+            shared_value_keys + docs_value_keys if source_kind == "docs" else shared_value_keys
         ):
             add_value(key)
 
-        for key in ("compact", "recompute", "include_hidden"):
+        shared_bool_keys = ("compact", "recompute")
+        docs_bool_keys = ("include_hidden",)
+        for key in shared_bool_keys + docs_bool_keys if source_kind == "docs" else shared_bool_keys:
             if key in build_config:
                 flag = key.replace("_", "-")
                 build_args_list.append(f"--{flag}" if build_config[key] else f"--no-{flag}")
 
-        if build_config.get("use_ast_chunking"):
+        if source_kind == "docs" and build_config.get("use_ast_chunking"):
             build_args_list.append("--use-ast-chunking")
-        if "ast_fallback_traditional" in build_config:
+        if source_kind == "docs" and "ast_fallback_traditional" in build_config:
             build_args_list.append(
                 "--ast-fallback-traditional"
                 if build_config["ast_fallback_traditional"]
@@ -3029,28 +3442,21 @@ Examples:
                     meta = json.load(f)
 
                 backend_name = meta.get("backend_name")
-                is_compact = meta.get(
-                    "is_compact", meta.get("backend_kwargs", {}).get("is_compact", True)
-                )
+                meta_backend_kwargs = meta.get("backend_kwargs", {})
+                is_compact = meta.get("is_compact", meta_backend_kwargs.get("is_compact", True))
                 same_embedding = (
                     meta.get("embedding_model") == args.embedding_model
                     and meta.get("embedding_mode") == args.embedding_mode
                 )
 
-                # IVF supports remove+add, so it can handle modified and removed files incrementally
-                can_ivf_update = backend_name == "ivf" and not is_compact and same_embedding
-                # HNSW only supports add (no remove), so it needs add-only changes
-                can_add_only = (
-                    not removed_paths
-                    and not modified_paths
-                    and backend_name in ("hnsw", "ivf")
-                    and not is_compact
-                    and same_embedding
+                # IVF and flat support remove+add, so they can handle modified and removed files incrementally.
+                can_native_update = (
+                    backend_name in ("ivf", "flat") and not is_compact and same_embedding
                 )
 
                 # Remove-only fast path: no load/chunk, just remove IDs from index
-                if can_ivf_update and removed_paths and not new_paths and not modified_paths:
-                    result = self._incremental_ivf_remove_only(
+                if can_native_update and removed_paths and not new_paths and not modified_paths:
+                    result = self._incremental_native_remove_only(
                         index_path, index_dir, removed_paths, args
                     )
                     if result:
@@ -3065,36 +3471,41 @@ Examples:
                         self.register_project_dir()
                         return
 
-                # Load only changed files (no need to load/chunk the entire corpus)
-                # Resolve paths relative to sync roots (sync returns paths relative to each root)
-                roots = self._resolve_sync_roots(docs_paths)
-                paths_to_load = new_paths | modified_paths
-                resolved_paths: list[str] = []
-                for p in paths_to_load:
-                    path_obj = Path(p)
-                    if path_obj.is_absolute() and path_obj.exists():
-                        resolved_paths.append(p)
-                    else:
-                        for root in roots:
-                            candidate = Path(root) / p
-                            if candidate.exists():
-                                resolved_paths.append(str(candidate.resolve()))
-                                break
+                if not can_native_update:
+                    self._log_rebuild_reason(meta, args, new_paths, removed_paths, modified_paths)
+                    # Full rebuild below must load the whole docs corpus, not just changed files.
+                    all_texts = None
+                else:
+                    # Load only changed files (no need to load/chunk the entire corpus)
+                    # Resolve paths relative to sync roots (sync returns paths relative to each root)
+                    roots = self._resolve_sync_roots(docs_paths)
+                    paths_to_load = new_paths | modified_paths
+                    resolved_paths: list[str] = []
+                    for p in paths_to_load:
+                        path_obj = Path(p)
+                        if path_obj.is_absolute() and path_obj.exists():
+                            resolved_paths.append(p)
                         else:
-                            resolved_paths.append(p)  # fallback: pass as-is
-                all_texts = self.load_documents(
-                    resolved_paths,
-                    args.file_types,
-                    include_hidden=args.include_hidden,
-                    args=args,
-                )
-                # Proceed even when all_texts is empty (e.g. file emptied): we still need to remove old chunks
-                if not all_texts and not (can_ivf_update and (modified_paths or removed_paths)):
-                    print("No documents found")
-                    return
+                            for root in roots:
+                                candidate = Path(root) / p
+                                if candidate.exists():
+                                    resolved_paths.append(str(candidate.resolve()))
+                                    break
+                            else:
+                                resolved_paths.append(p)  # fallback: pass as-is
+                    all_texts = self.load_documents(
+                        resolved_paths,
+                        args.file_types,
+                        include_hidden=args.include_hidden,
+                        args=args,
+                    )
+                    self._stamp_docs_build_metadata(all_texts, docs_paths, args)
+                    # Proceed even when all_texts is empty (e.g. file emptied): we still need to remove old chunks
+                    if not all_texts and not (modified_paths or removed_paths):
+                        print("No documents found")
+                        return
 
-                if can_ivf_update and (new_paths or modified_paths or removed_paths):
-                    result = self._incremental_ivf_update(
+                    result = self._incremental_native_update(
                         index_path,
                         index_dir,
                         all_texts,
@@ -3116,35 +3527,20 @@ Examples:
                         self.register_project_dir()
                         return
 
-                elif can_add_only and new_paths:
-                    result = self._incremental_add_only(
-                        index_path,
-                        all_texts,
-                        args,
-                        new_paths,
-                    )
-                    if result:
-                        self._commit_synchronizers(synchronizers)
-                        self._write_sync_config(
-                            index_dir,
-                            self._resolve_sync_roots(docs_paths),
-                            self._parse_file_types(args.file_types),
-                            self._sync_ignore_patterns(args.include_hidden),
-                        )
-                        self._write_build_config(index_dir, args, docs_paths)
-                        self.register_project_dir()
-                        return
-
-                else:
-                    self._log_rebuild_reason(meta, args, new_paths, removed_paths, modified_paths)
+                if can_native_update and "all_texts" in locals():
+                    print("Incremental update did not apply; falling back to full rebuild.")
+                    all_texts = None
 
         # Full rebuild: load documents if not already loaded (first build or force)
         try:
             _ = all_texts
         except NameError:
+            all_texts = None
+        if all_texts is None:
             all_texts = self.load_documents(
                 docs_paths, args.file_types, include_hidden=args.include_hidden, args=args
             )
+            self._stamp_docs_build_metadata(all_texts, docs_paths, args)
         if not all_texts:
             print("No documents found")
             return
@@ -3198,11 +3594,23 @@ Examples:
             [str(input_path.parent)],
             include_extensions=[input_path.suffix] if input_path.suffix else None,
         )
+        if getattr(args, "incremental_by_id", False):
+            if self._try_incremental_jsonl_by_id(
+                index_path, index_dir, input_path, args, rows, synchronizers
+            ):
+                return
+            self._full_build_jsonl_index(
+                index_path, index_dir, input_path, args, rows, synchronizers
+            )
+            return
+
         changed = True
         if index_dir.exists() and not args.force and synchronizers:
             new_paths, removed_paths, modified_paths = self._detect_build_changes(synchronizers)
             input_keys = {str(input_path), input_path.name}
-            input_changed = bool({str(p) for p in new_paths | removed_paths | modified_paths} & input_keys)
+            input_changed = bool(
+                {str(p) for p in new_paths | removed_paths | modified_paths} & input_keys
+            )
             changed = input_changed
 
             meta_path = index_dir / "documents.leann.meta.json"
@@ -3230,8 +3638,10 @@ Examples:
                         meta.get("embedding_model") == args.embedding_model
                         and meta.get("embedding_mode") == args.embedding_mode
                     )
-                    can_ivf_update = backend_name == "ivf" and not is_compact and same_embedding
-                    if can_ivf_update and changed:
+                    can_native_update = (
+                        backend_name in ("ivf", "flat") and not is_compact and same_embedding
+                    )
+                    if can_native_update and changed:
                         offset_file = index_dir / "documents.leann.passages.idx"
                         ids_to_remove: list[str] = []
                         if offset_file.exists():
@@ -3244,7 +3654,9 @@ Examples:
                             metadata.setdefault("indexed_at", indexed_at)
                             builder.add_text(row["text"], metadata=metadata)
                         print(
-                            f"Incremental JSONL IVF update: replacing {len(ids_to_remove)} old row(s) with {len(rows)} current row(s)..."
+                            "Incremental JSONL native update: "
+                            f"replacing {len(ids_to_remove)} old row(s) "
+                            f"with {len(rows)} current row(s)..."
                         )
                         builder.update_index(
                             index_path, remove_passage_ids=ids_to_remove if ids_to_remove else None
@@ -3263,36 +3675,7 @@ Examples:
                 except Exception as exc:
                     print(f"Warning: Could not apply incremental JSONL update: {exc}")
 
-        print(f"Building JSONL index '{index_name}' with {args.backend_name} backend...")
-        builder = LeannBuilder(
-            backend_name=args.backend_name,
-            embedding_model=args.embedding_model,
-            embedding_mode=args.embedding_mode,
-            embedding_options=self._build_embedding_options(args) or None,
-            graph_degree=args.graph_degree,
-            complexity=args.complexity,
-            is_compact=args.compact,
-            is_recompute=args.recompute,
-            num_threads=args.num_threads,
-        )
-        indexed_at = datetime.now(timezone.utc).isoformat()
-        for row in rows:
-            metadata = dict(row["metadata"])
-            metadata.setdefault("indexed_at", indexed_at)
-            builder.add_text(row["text"], metadata=metadata)
-
-        builder.build_index(index_path)
-        for fs in synchronizers:
-            fs.create_snapshot()
-        self._write_sync_config(
-            index_dir,
-            [str(input_path.parent)],
-            [input_path.suffix] if input_path.suffix else None,
-            None,
-        )
-        self._write_jsonl_build_config(index_dir, args)
-        print(f"Index built at {index_path}")
-        self.register_project_dir()
+        self._full_build_jsonl_index(index_path, index_dir, input_path, args, rows, synchronizers)
 
     def _watch_check_changes(self, index_name: str) -> tuple[set[str], set[str], set[str]]:
         """Check for file changes using the same snapshots as build (index_dir)."""
@@ -3380,9 +3763,7 @@ Examples:
 
         build_config = meta.get("build_config")
         if isinstance(build_config, dict):
-            build_args_list = self._args_from_build_config(
-                index_name, build_config, force=force
-            )
+            build_args_list = self._args_from_build_config(index_name, build_config, force=force)
             if build_args_list is not None:
                 return build_args_list
             if verbose:
@@ -3698,10 +4079,18 @@ Examples:
                 if file_name and file_name != file_path:
                     print(f"   Name: {file_name}")
 
-                if "creation_date" in result.metadata:
-                    print(f"   Created: {result.metadata['creation_date']}")
-                if "last_modified_date" in result.metadata:
-                    print(f"   Modified: {result.metadata['last_modified_date']}")
+                created = result.metadata.get("created_at") or result.metadata.get("creation_date")
+                modified = result.metadata.get("modified_at") or result.metadata.get(
+                    "last_modified_date"
+                )
+                if created:
+                    print(f"   Created: {created}")
+                if modified:
+                    print(f"   Modified: {modified}")
+                if "event_time" in result.metadata:
+                    print(f"   Event: {result.metadata['event_time']}")
+                if "indexed_at" in result.metadata:
+                    print(f"   Indexed: {result.metadata['indexed_at']}")
 
             print(f"   {result.text}")
             print(f"   Source: {result.metadata.get('source', '')}")

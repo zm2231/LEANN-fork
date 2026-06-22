@@ -13,9 +13,12 @@ from typing import Any, Optional
 import numpy as np
 
 try:
-    import faiss
+    from leann_backend_hnsw import faiss
 except ImportError:
-    faiss = None  # type: ignore[assignment]
+    try:
+        import faiss
+    except ImportError:
+        faiss = None  # type: ignore[assignment]
 
 from leann.interface import (
     LeannBackendBuilderInterface,
@@ -33,7 +36,8 @@ ID_MAP_FILENAME = "ivf_id_map.json"
 def _check_faiss():
     if faiss is None:
         raise ImportError(
-            "faiss-cpu is required for IVF backend. Install with: pip install faiss-cpu"
+            "IVF backend requires leann-backend-hnsw's FAISS binding or faiss-cpu. "
+            "Install leann-backend-hnsw or faiss-cpu."
         )
 
 
@@ -50,6 +54,55 @@ def _normalize_l2(data: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(data, axis=1, keepdims=True)
     norms[norms == 0] = 1
     return data / norms
+
+
+def _uses_raw_faiss_api() -> bool:
+    return bool(faiss and faiss.__name__ == "leann_backend_hnsw.faiss")
+
+
+def _read_index(index_file: Path):
+    index = faiss.read_index(str(index_file))
+    if hasattr(faiss, "downcast_index"):
+        return index, faiss.downcast_index(index)
+    return index, index
+
+
+def _train(index, data: np.ndarray) -> None:
+    if _uses_raw_faiss_api():
+        index.train(data.shape[0], faiss.swig_ptr(data))
+    else:
+        index.train(data)
+
+
+def _add_with_ids(index, embeddings: np.ndarray, ids: np.ndarray) -> None:
+    if _uses_raw_faiss_api():
+        index.add_with_ids(embeddings.shape[0], faiss.swig_ptr(embeddings), faiss.swig_ptr(ids))
+    else:
+        index.add_with_ids(embeddings, ids)
+
+
+def _search(index, query: np.ndarray, top_k: int) -> tuple[np.ndarray, np.ndarray]:
+    if _uses_raw_faiss_api():
+        distances = np.empty((query.shape[0], top_k), dtype=np.float32)
+        labels = np.empty((query.shape[0], top_k), dtype=np.int64)
+        index.search(
+            query.shape[0],
+            faiss.swig_ptr(query),
+            top_k,
+            faiss.swig_ptr(distances),
+            faiss.swig_ptr(labels),
+        )
+        return distances, labels
+    return index.search(query, top_k)
+
+
+def _remove_ids(index, ids: np.ndarray) -> int:
+    selector = faiss.IDSelectorArray(ids.size, faiss.swig_ptr(ids))
+    if _uses_raw_faiss_api():
+        return index.remove_ids(selector)
+    if hasattr(index, "remove_ids_c"):
+        return index.remove_ids_c(selector)
+    return index.remove_ids(ids)
 
 
 def _load_id_map(index_dir: Path, index_prefix: str) -> tuple[dict[int, str], dict[str, int], int]:
@@ -124,10 +177,10 @@ class IVFBuilder(LeannBackendBuilderInterface):
             faiss.IndexFlatL2(dim) if metric_enum == faiss.METRIC_L2 else faiss.IndexFlatIP(dim)
         )
         ivf = faiss.IndexIVFFlat(quantizer, dim, self.nlist, metric_enum)
-        ivf.train(data)
+        _train(ivf, data)
         ivf.set_direct_map_type(faiss.DirectMap.Hashtable)
         faiss_ids = np.arange(n, dtype=np.int64)
-        ivf.add_with_ids(data, faiss_ids)
+        _add_with_ids(ivf, data, faiss_ids)
 
         index_file = index_dir / f"{index_prefix}.index"
         faiss.write_index(ivf, str(index_file))
@@ -153,7 +206,7 @@ class IVFSearcher(BaseSearcher):
         if not index_file.exists():
             raise FileNotFoundError(f"IVF index file not found at {index_file}")
 
-        self._index = faiss.read_index(str(index_file))
+        self._raw_index, self._index = _read_index(index_file)
         self._id_to_passage: dict[int, str] = {}
         id_to_passage, _, _ = _load_id_map(self.index_dir, index_prefix)
         self._id_to_passage = id_to_passage
@@ -167,20 +220,34 @@ class IVFSearcher(BaseSearcher):
         **kwargs,
     ) -> dict[str, Any]:
         _check_faiss()
-        if query.dtype != np.float32:
-            query = query.astype(np.float32)
+        query = np.asarray(query, dtype=np.float32)
+        if query.ndim == 1:
+            query = query.reshape(1, -1)
+        query = np.ascontiguousarray(query)
         if self.distance_metric == "cosine":
             query = _normalize_l2(query)
-        ivf_index = faiss.extract_index_ivf(self._index)
-        nprobe = nprobe or min(complexity, ivf_index.nlist)
+        ivf_index = self._index
+        if not hasattr(ivf_index, "nprobe") or not hasattr(ivf_index, "nlist"):
+            ivf_index = faiss.extract_index_ivf(ivf_index)
+        nprobe = nprobe or min(complexity, int(ivf_index.nlist))
         ivf_index.nprobe = nprobe
-        distances, label_rows = self._index.search(query, top_k)
+        distances, label_rows = _search(self._index, query, top_k)
 
-        def map_label(x: int) -> str:
-            return self._id_to_passage.get(int(x), str(x))
-
-        string_labels = [[map_label(int(lab)) for lab in row] for row in label_rows]
-        return {"labels": string_labels, "distances": distances}
+        string_labels: list[list[str]] = []
+        filtered_distances: list[list[float]] = []
+        for distance_row, label_row in zip(distances, label_rows):
+            row_labels: list[str] = []
+            row_distances: list[float] = []
+            for distance, label in zip(distance_row, label_row):
+                int_label = int(label)
+                passage_id = self._id_to_passage.get(int_label)
+                if passage_id is None:
+                    continue
+                row_labels.append(passage_id)
+                row_distances.append(float(distance))
+            string_labels.append(row_labels)
+            filtered_distances.append(row_distances)
+        return {"labels": string_labels, "distances": filtered_distances}
 
     def compute_query_embedding(
         self,
@@ -224,10 +291,10 @@ def add_vectors(index_path: str, embeddings: np.ndarray, passage_ids: list[str])
     if n != len(passage_ids):
         raise ValueError("embeddings.shape[0] must equal len(passage_ids).")
 
-    index = faiss.read_index(str(index_file))
+    raw_index, index = _read_index(index_file)
     new_ids = np.arange(next_id, next_id + n, dtype=np.int64)
-    index.add_with_ids(embeddings, new_ids)
-    faiss.write_index(index, str(index_file))
+    _add_with_ids(index, embeddings, new_ids)
+    faiss.write_index(raw_index, str(index_file))
 
     for i, pid in enumerate(passage_ids):
         id_to_passage[next_id + i] = pid
@@ -262,11 +329,11 @@ def remove_ids(index_path: str, passage_ids: list[str]) -> int:
     if not to_remove_int:
         return 0
 
-    index = faiss.read_index(str(index_file))
+    raw_index, index = _read_index(index_file)
     ntotal_before = index.ntotal
     sel = np.array(to_remove_int, dtype=np.int64)
-    nremoved = index.remove_ids(sel)
-    faiss.write_index(index, str(index_file))
+    nremoved = _remove_ids(index, sel)
+    faiss.write_index(raw_index, str(index_file))
 
     for pid in passage_ids:
         if pid in passage_to_id:

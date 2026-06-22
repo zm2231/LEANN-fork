@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "leann-backend-flat"
+version = "0.3.7"
+description = "Exact flat-vector backend for LEANN"
+requires-python = ">=3.10"
+dependencies = [
+    "leann-core>=0.3.7",
+    "numpy>=1.20.0,<3",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["leann_backend_flat*"]

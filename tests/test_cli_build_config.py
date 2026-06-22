@@ -54,6 +54,7 @@ def test_reconstruct_prefers_persisted_build_config(monkeypatch, tmp_path):
                 "recompute": False,
                 "file_types": ".md,.txt",
                 "include_hidden": True,
+                "top_folder_depth": 2,
                 "doc_chunk_size": 384,
                 "doc_chunk_overlap": 96,
                 "code_chunk_size": 640,
@@ -81,6 +82,7 @@ def test_reconstruct_prefers_persisted_build_config(monkeypatch, tmp_path):
     assert "--no-compact" in args
     assert "--no-recompute" in args
     assert "--include-hidden" in args
+    assert args[args.index("--top-folder-depth") + 1] == "2"
     assert "--use-ast-chunking" in args
     assert "--no-ast-fallback-traditional" in args
     assert "--force" in args
@@ -106,6 +108,7 @@ def test_reconstruct_jsonl_build_config(monkeypatch, tmp_path):
                 "text_field": "body",
                 "metadata_field": "meta",
                 "id_field": "tool_id",
+                "incremental_by_id": True,
                 "backend_name": "ivf",
                 "embedding_model": "BAAI/bge-m3",
                 "embedding_mode": "openai",
@@ -137,10 +140,28 @@ def test_reconstruct_jsonl_build_config(monkeypatch, tmp_path):
     assert args[args.index("--text-field") + 1] == "body"
     assert args[args.index("--metadata-field") + 1] == "meta"
     assert args[args.index("--id-field") + 1] == "tool_id"
+    assert "--incremental-by-id" in args
     assert "--backend-name" in args
     assert args[args.index("--backend-name") + 1] == "ivf"
     assert "--no-recompute" in args
     assert "--force" in args
+    for docs_only_flag in (
+        "--file-types",
+        "--include-hidden",
+        "--no-include-hidden",
+        "--doc-chunk-size",
+        "--doc-chunk-overlap",
+        "--code-chunk-size",
+        "--code-chunk-overlap",
+        "--use-ast-chunking",
+        "--ast-chunk-size",
+        "--ast-chunk-overlap",
+        "--ast-fallback-traditional",
+        "--no-ast-fallback-traditional",
+    ):
+        assert docs_only_flag not in args
+    parsed = cli.create_parser().parse_args(args)
+    assert parsed.command == "build-jsonl"
 
 
 def test_reconstruct_legacy_falls_back_to_sync_roots(monkeypatch, tmp_path):
@@ -193,7 +214,9 @@ def test_build_defaults_apply_only_to_manual_builds(monkeypatch, tmp_path):
     monkeypatch.setenv("LEANN_BUILD_DEFAULTS", str(defaults_path))
     parser = cli.create_parser()
 
-    manual = parser.parse_args(["build", "idx", "--docs", str(tmp_path), "--build-preset", "meetings"])
+    manual = parser.parse_args(
+        ["build", "idx", "--docs", str(tmp_path), "--build-preset", "meetings"]
+    )
     cli._apply_build_defaults(manual)
 
     assert manual.embedding_model == "BAAI/bge-m3"
@@ -278,6 +301,8 @@ def test_write_build_config_persists_full_build_settings(monkeypatch, tmp_path):
             "--no-compact",
             "--file-types",
             ".md,.txt",
+            "--top-folder-depth",
+            "2",
             "--doc-chunk-size",
             "384",
             "--doc-chunk-overlap",
@@ -298,6 +323,7 @@ def test_write_build_config_persists_full_build_settings(monkeypatch, tmp_path):
     assert build_config["recompute"] is False
     assert build_config["compact"] is False
     assert build_config["file_types"] == ".md,.txt"
+    assert build_config["top_folder_depth"] == 2
     assert build_config["doc_chunk_size"] == 384
     assert build_config["doc_chunk_overlap"] == 96
     assert build_config["use_ast_chunking"] is True
@@ -365,7 +391,13 @@ def test_build_jsonl_persists_metadata_and_build_config(monkeypatch, tmp_path):
 
         def add_text(self, text, metadata=None):
             metadata = dict(metadata or {})
-            self.chunks.append({"id": metadata.get("id", str(len(self.chunks))), "text": text, "metadata": metadata})
+            self.chunks.append(
+                {
+                    "id": metadata.get("id", str(len(self.chunks))),
+                    "text": text,
+                    "metadata": metadata,
+                }
+            )
 
         def build_index(self, index_path):
             index_path = Path(index_path)
@@ -384,7 +416,9 @@ def test_build_jsonl_persists_metadata_and_build_config(monkeypatch, tmp_path):
                 ),
                 encoding="utf-8",
             )
-            with open(index_path.parent / f"{index_path.name}.passages.jsonl", "w", encoding="utf-8") as f:
+            with open(
+                index_path.parent / f"{index_path.name}.passages.jsonl", "w", encoding="utf-8"
+            ) as f:
                 offsets = {}
                 for chunk in self.chunks:
                     offsets[chunk["id"]] = f.tell()
@@ -426,8 +460,241 @@ def test_build_jsonl_persists_metadata_and_build_config(monkeypatch, tmp_path):
     assert build_config["text_field"] == "text"
     assert build_config["metadata_field"] == "metadata"
     assert build_config["id_field"] == "id"
+    assert build_config["incremental_by_id"] is False
     assert build_config["backend_name"] == "ivf"
     assert build_config["recompute"] is False
+
+
+def test_incremental_jsonl_requires_unique_stable_ids(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    input_path = tmp_path / "tools.jsonl"
+    input_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "tool-a", "text": "alpha", "metadata": {}}),
+                json.dumps({"id": "tool-a", "text": "beta", "metadata": {}}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    parser = cli.create_parser()
+    args = parser.parse_args(
+        ["build-jsonl", "tools", "--input", str(input_path), "--incremental-by-id"]
+    )
+
+    try:
+        cli._load_jsonl_rows(args)
+    except ValueError as exc:
+        assert "duplicate row id 'tool-a'" in str(exc)
+    else:
+        raise AssertionError("duplicate incremental JSONL ids should fail")
+
+
+def test_incremental_jsonl_hash_ignores_indexed_at(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    row_a = {
+        "id": "tool-a",
+        "text": "alpha",
+        "metadata": {"id": "tool-a", "indexed_at": "2026-01-01T00:00:00Z"},
+    }
+    row_b = {
+        "id": "tool-a",
+        "text": "alpha",
+        "metadata": {"id": "tool-a", "indexed_at": "2026-01-02T00:00:00Z"},
+    }
+
+    assert cli._jsonl_row_hash(row_a) == cli._jsonl_row_hash(row_b)
+
+
+def test_incremental_jsonl_ivf_updates_only_changed_rows(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    input_path = tmp_path / "tools.jsonl"
+
+    def write_rows(rows):
+        input_path.write_text(
+            "".join(json.dumps(row) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+
+    write_rows(
+        [
+            {"id": "tool-a", "text": "alpha text", "metadata": {"group": "core"}},
+            {"id": "tool-b", "text": "beta text", "metadata": {"group": "core"}},
+        ]
+    )
+
+    class FakeBuilder:
+        update_calls = []
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.chunks = []
+
+        def add_text(self, text, metadata=None):
+            metadata = dict(metadata or {})
+            self.chunks.append({"id": metadata.get("id"), "text": text, "metadata": metadata})
+
+        def build_index(self, index_path):
+            self._write_index(Path(index_path), [])
+
+        def update_index(self, index_path, remove_passage_ids=None):
+            FakeBuilder.update_calls.append(
+                {
+                    "add_ids": [chunk["id"] for chunk in self.chunks],
+                    "remove_ids": list(remove_passage_ids or []),
+                }
+            )
+            self._write_index(Path(index_path), list(remove_passage_ids or []), append=True)
+
+        def _write_index(self, index_path, remove_ids, append=False):
+            index_path.parent.mkdir(parents=True, exist_ok=True)
+            meta_path = index_path.parent / f"{index_path.name}.meta.json"
+            passages_path = index_path.parent / f"{index_path.name}.passages.jsonl"
+            offset_path = index_path.parent / f"{index_path.name}.passages.idx"
+            existing = []
+            if append and passages_path.exists():
+                existing = [
+                    json.loads(line)
+                    for line in passages_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            remove_set = set(remove_ids)
+            chunks = [chunk for chunk in existing if chunk["id"] not in remove_set]
+            chunks.extend(self.chunks)
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "backend_name": self.kwargs["backend_name"],
+                        "embedding_model": self.kwargs["embedding_model"],
+                        "embedding_mode": self.kwargs["embedding_mode"],
+                        "total_passages": len(chunks),
+                        "backend_kwargs": {
+                            "is_compact": self.kwargs["is_compact"],
+                            "is_recompute": self.kwargs["is_recompute"],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            offsets = {}
+            with open(passages_path, "w", encoding="utf-8") as f:
+                for chunk in chunks:
+                    offsets[chunk["id"]] = f.tell()
+                    f.write(json.dumps(chunk) + "\n")
+            with open(offset_path, "wb") as f:
+                pickle.dump(offsets, f)
+
+    import leann.cli as cli_module
+
+    monkeypatch.setattr(cli_module, "LeannBuilder", FakeBuilder)
+    parser = cli.create_parser()
+    build_args = [
+        "build-jsonl",
+        "tools",
+        "--input",
+        str(input_path),
+        "--backend-name",
+        "ivf",
+        "--no-recompute",
+        "--incremental-by-id",
+    ]
+
+    asyncio.run(cli.build_jsonl_index(parser.parse_args([*build_args, "--force"])))
+    write_rows(
+        [
+            {"id": "tool-a", "text": "alpha text", "metadata": {"group": "core"}},
+            {"id": "tool-b", "text": "beta changed", "metadata": {"group": "core"}},
+            {"id": "tool-c", "text": "gamma text", "metadata": {"group": "core"}},
+        ]
+    )
+
+    asyncio.run(cli.build_jsonl_index(parser.parse_args(build_args)))
+
+    assert FakeBuilder.update_calls == [{"add_ids": ["tool-c", "tool-b"], "remove_ids": ["tool-b"]}]
+    index_dir = cli.indexes_dir / "tools"
+    rowhashes = json.loads((index_dir / "documents.leann.rowhashes.json").read_text())
+    assert set(rowhashes["rows"]) == {"tool-a", "tool-b", "tool-c"}
+
+
+def test_jsonl_drift_guard_rejects_reordered_hnsw_idmap(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    index_dir = tmp_path / "idx"
+    index_dir.mkdir()
+    passages = [
+        {"id": "row-a", "text": "alpha", "metadata": {"id": "row-a"}},
+        {"id": "row-b", "text": "beta", "metadata": {"id": "row-b"}},
+    ]
+    with open(index_dir / "documents.leann.passages.jsonl", "w", encoding="utf-8") as f:
+        offsets = {}
+        for passage in passages:
+            offsets[passage["id"]] = f.tell()
+            f.write(json.dumps(passage) + "\n")
+    with open(index_dir / "documents.leann.passages.idx", "wb") as f:
+        pickle.dump(offsets, f)
+    (index_dir / "documents.ids.txt").write_text("row-b\nrow-a\n", encoding="utf-8")
+    (index_dir / "documents.index").write_text("fake index", encoding="utf-8")
+
+    assert (
+        cli._jsonl_incremental_drift_reason(
+            index_dir,
+            {"backend_name": "hnsw", "total_passages": 2},
+            {"row-a": "hash-a", "row-b": "hash-b"},
+        )
+        == "HNSW id map order differs from passages.jsonl"
+    )
+
+
+def test_jsonl_drift_guard_rejects_missing_hnsw_native_index(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    index_dir = tmp_path / "idx"
+    index_dir.mkdir()
+    passage = {"id": "row-a", "text": "alpha", "metadata": {"id": "row-a"}}
+    (index_dir / "documents.leann.passages.jsonl").write_text(
+        json.dumps(passage) + "\n", encoding="utf-8"
+    )
+    with open(index_dir / "documents.leann.passages.idx", "wb") as f:
+        pickle.dump({"row-a": 0}, f)
+    (index_dir / "documents.ids.txt").write_text("row-a\n", encoding="utf-8")
+
+    assert (
+        cli._jsonl_incremental_drift_reason(
+            index_dir,
+            {"backend_name": "hnsw", "total_passages": 1},
+            {"row-a": "hash-a"},
+        )
+        == "HNSW native index is missing"
+    )
+
+
+def test_jsonl_drift_guard_rejects_stale_bm25_same_count(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    index_dir = tmp_path / "idx"
+    index_dir.mkdir()
+    passage = {"id": "row-a", "text": "fresh alpha", "metadata": {"id": "row-a"}}
+    (index_dir / "documents.leann.passages.jsonl").write_text(
+        json.dumps(passage) + "\n", encoding="utf-8"
+    )
+    with open(index_dir / "documents.leann.passages.idx", "wb") as f:
+        pickle.dump({"row-a": 0}, f)
+
+    from leann.api import Fts5BM25Index
+
+    bm25_path = index_dir / "documents.leann.bm25.sqlite"
+    bm25 = Fts5BM25Index(str(bm25_path))
+    try:
+        bm25.fit([{"id": "row-a", "text": "stale alpha"}])
+    finally:
+        bm25.close()
+
+    assert (
+        cli._jsonl_incremental_drift_reason(
+            index_dir,
+            {"backend_name": "ivf", "total_passages": 1, "bm25_db": bm25_path.name},
+            {"row-a": "hash-a"},
+        )
+        == "BM25 sidecar documents differ from passages.jsonl"
+    )
 
 
 def test_unchanged_legacy_index_records_matching_build_config(monkeypatch, tmp_path):
@@ -456,9 +723,7 @@ def test_unchanged_legacy_index_records_matching_build_config(monkeypatch, tmp_p
     assert meta["build_config"]["docs"] == [str(docs.resolve())]
 
 
-def test_unchanged_index_does_not_overwrite_different_build_config(
-    monkeypatch, tmp_path, capsys
-):
+def test_unchanged_index_does_not_overwrite_different_build_config(monkeypatch, tmp_path, capsys):
     cli = _make_cli(monkeypatch, tmp_path)
     docs = tmp_path / "docs"
     docs.mkdir()
