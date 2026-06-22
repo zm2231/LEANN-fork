@@ -37,6 +37,9 @@ analysis_results/
 build/
 .cache/
 .leann/
+.codebase-memory/
+.agents/skills/
+.claude/skills/
 tools/nightly_rebuild_coding_sessions.sh
 nprobe_logs/
 micro/results
@@ -126,3 +129,7 @@ test-code/
 localtestmcp/
 *.csv
 *.pickle
+.gitnexus
+
+# Local research notes (not for upstream)
+docs/research/
