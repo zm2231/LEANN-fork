@@ -1640,7 +1640,7 @@ Examples:
 
             # 1) CLI-format index under .leann/indexes/<name>
             index_dir = project_path / ".leann" / "indexes" / index_name
-            if index_dir.exists():
+            if (index_dir / "documents.leann.meta.json").is_file():
                 is_current = project_path == current_path
                 matches.append(
                     {
@@ -1657,8 +1657,12 @@ Examples:
             #   b) by the parent directory name (e.g., `new_txt`)
             seen_app_meta = set()
 
+            app_meta_files = list(self._iter_app_meta_files(project_path))
+
             # 2a) by file base
-            for meta_file in project_path.rglob(f"{index_name}.leann.meta.json"):
+            for meta_file in app_meta_files:
+                if meta_file.name != f"{index_name}.leann.meta.json":
+                    continue
                 if meta_file.is_file():
                     # Skip CLI-built indexes' meta under .leann/indexes
                     try:
@@ -1685,7 +1689,7 @@ Examples:
                     )
 
             # 2b) by parent directory name
-            for meta_file in project_path.rglob("*.leann.meta.json"):
+            for meta_file in app_meta_files:
                 if meta_file.is_file() and meta_file.parent.name == index_name:
                     # Skip CLI-built indexes' meta under .leann/indexes
                     try:
@@ -1714,6 +1718,36 @@ Examples:
         # Sort: current project first, then by project name
         matches.sort(key=lambda x: (not x["is_current"], x["project_path"].name))
         return matches
+
+    def _iter_app_meta_files(self, project_path: Path):
+        """Yield app-format LEANN metadata files without crawling heavy project trees."""
+        skip_dirs = {
+            ".git",
+            ".hg",
+            ".svn",
+            ".venv",
+            "venv",
+            "node_modules",
+            ".mypy_cache",
+            ".pytest_cache",
+            "__pycache__",
+            ".ruff_cache",
+            ".tox",
+            ".worktrees",
+            "dist",
+            "build",
+        }
+        cli_indexes_dir = project_path / ".leann" / "indexes"
+        for root, dirs, files in os.walk(project_path):
+            root_path = Path(root)
+            dirs[:] = [
+                d
+                for d in dirs
+                if d not in skip_dirs and not (root_path / d).is_relative_to(cli_indexes_dir)
+            ]
+            for filename in files:
+                if filename.endswith(".leann.meta.json"):
+                    yield root_path / filename
 
     def _remove_single_match(self, match, index_name: str, force: bool):
         """Handle removal when only one match is found"""
@@ -2754,6 +2788,17 @@ Examples:
         except Exception as exc:
             print(f"Warning: Could not persist build_config to {meta_path}: {exc}")
 
+    def _jsonl_index_counts(self, index_dir: Path) -> dict[str, int]:
+        passages = self._load_jsonl_live_passages(index_dir)
+        source_document_ids = {
+            str(passage.get("metadata", {}).get("source_document_id") or passage["id"])
+            for passage in passages
+        }
+        return {
+            "total_passages": len(passages),
+            "total_documents": len(source_document_ids),
+        }
+
     def _write_jsonl_build_config(self, index_dir: Path, args) -> None:
         meta_path = index_dir / "documents.leann.meta.json"
         if not meta_path.exists():
@@ -2762,6 +2807,7 @@ Examples:
             with open(meta_path, encoding="utf-8") as f:
                 meta = json.load(f)
             meta["build_config"] = self._make_jsonl_build_config(args)
+            meta.update(self._jsonl_index_counts(index_dir))
             with open(meta_path, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
         except Exception as exc:
@@ -2934,8 +2980,14 @@ Examples:
             return "passages.idx and passages.jsonl ids differ"
         if offset_ids != rowhash_ids:
             return "rowhash sidecar ids differ from passage ids"
-        if int(meta.get("total_passages", -1)) != len(offset_ids):
-            return "meta total_passages differs from passage count"
+        total_passages = meta.get("total_passages")
+        if total_passages is not None:
+            try:
+                total_passages_int = int(total_passages)
+            except (TypeError, ValueError):
+                return "meta total_passages is invalid"
+            if total_passages_int != len(offset_ids):
+                return "meta total_passages differs from passage count"
 
         bm25_db_name = meta.get("bm25_db")
         if bm25_db_name:
@@ -3895,8 +3947,28 @@ Examples:
         """Resolve index path from current project or registered projects."""
         _print = (lambda *a, **kw: print(*a, file=sys.stderr, **kw)) if quiet else print
 
+        explicit_path = self._resolve_explicit_index_path(index_name)
+        if explicit_path is not None:
+            return explicit_path
+
         if self.index_exists(index_name):
             return self.get_index_path(index_name)
+
+        cli_matches = self._find_cli_index_matches(index_name)
+        if cli_matches:
+            match = cli_matches[0]
+            location_desc = (
+                "current project"
+                if match["is_current"]
+                else f"project '{match['project_path'].name}'"
+            )
+            if len(cli_matches) > 1:
+                _print(
+                    f"Found {len(cli_matches)} CLI indexes named '{index_name}', using index from {location_desc}"
+                )
+            else:
+                _print(f"Using index '{index_name}' from {location_desc}")
+            return str(match["index_dir"] / "documents.leann")
 
         all_matches = self._find_all_matching_indexes(index_name)
         if not all_matches:
@@ -3962,6 +4034,71 @@ Examples:
         except (ValueError, KeyboardInterrupt):
             print("Invalid input. Aborting.")
             return None
+
+    def _resolve_explicit_index_path(self, index_name: str) -> Optional[str]:
+        """Resolve an index selector that is already a filesystem path."""
+        has_path_syntax = (
+            os.path.isabs(index_name)
+            or index_name.startswith("~")
+            or os.sep in index_name
+            or (os.altsep is not None and os.altsep in index_name)
+        )
+        if not has_path_syntax:
+            return None
+
+        path = Path(index_name).expanduser().resolve()
+        if path.is_dir():
+            meta_files = [
+                child
+                for child in path.iterdir()
+                if child.is_file()
+                and (child.name.endswith(".meta.json") or child.name.endswith(".leann.meta.json"))
+            ]
+            if len(meta_files) == 1:
+                return str(meta_files[0])[: -len(".meta.json")]
+            return None
+
+        if path.name.endswith(".meta.json"):
+            return str(path)[: -len(".meta.json")]
+        if Path(f"{path}.meta.json").exists():
+            return str(path)
+        return None
+
+    def _registered_project_paths(self) -> list[Path]:
+        global_registry = Path.home() / ".leann" / "projects.json"
+        all_projects: list[str] = []
+
+        if global_registry.exists():
+            try:
+                with open(global_registry) as f:
+                    all_projects = json.load(f)
+            except Exception:
+                pass
+
+        current_path = Path.cwd()
+        if str(current_path) not in all_projects:
+            all_projects.append(str(current_path))
+
+        return [Path(project_dir) for project_dir in all_projects]
+
+    def _find_cli_index_matches(self, index_name: str) -> list[dict[str, Any]]:
+        current_path = Path.cwd()
+        matches: list[dict[str, Any]] = []
+        for project_path in self._registered_project_paths():
+            if not project_path.exists():
+                continue
+            index_dir = project_path / ".leann" / "indexes" / index_name
+            if (index_dir / "documents.leann.meta.json").is_file():
+                matches.append(
+                    {
+                        "project_path": project_path,
+                        "index_dir": index_dir,
+                        "is_current": project_path == current_path,
+                        "kind": "cli",
+                    }
+                )
+        matches.sort(key=lambda x: (not x["is_current"], x["project_path"].name))
+        return matches
 
     async def search_documents(self, args):
         index_name = args.index_name

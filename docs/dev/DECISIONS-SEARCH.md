@@ -123,8 +123,9 @@ The Wave 2 sparse-filter primitive. Default `"auto"` covers ~all cases; override
 
 When `prefilter="auto"`:
 1. Estimate selectivity (matching passages / total). Fast — uses metadata index, not embeddings.
-2. If selectivity < `prefilter_threshold` (default 0.05 = 5%):
+2. If the backend is `flat`, or selectivity < `prefilter_threshold` (default 0.05 = 5%) on ANN backends:
    - **Brute-force prefilter**: score every matching passage against the query, return top-k. Bypasses ANN entirely.
+   - **On `flat` indexes**: this is the default for vector metadata-filtered searches because flat search is already exhaustive; ANN post-filtering adds false-zero risk without a useful speed trade-off.
    - **On `--no-recompute` indexes (Wave 2.1)**: scores stored FAISS vectors via `score_passage_ids()` instead of re-embedding. ~200× faster on real corpora (307ms vs 60s+ on 3415-match queries against a 9835-chunk index).
    - **On `--recompute` indexes**: falls back to embed-and-score (still correct, but slow). Embedding server must be reachable.
 3. Otherwise:
@@ -138,7 +139,7 @@ When `prefilter="auto"`:
 | `"always"` | Filter matches are tiny *and* you need guaranteed coverage (compliance / audit, single-thread retrieval, "find every mention by user X") |
 | `"never"` | Restoring pre-fork behavior for A/B comparison, or debugging |
 
-The `prefilter_threshold` knob (default 0.05) shifts where auto-mode flips. Raise it (e.g., 0.1) if you want brute-force to kick in more aggressively at the cost of some latency.
+The `prefilter_threshold` knob (default 0.05) shifts where auto-mode flips on ANN backends. Flat indexes ignore the threshold and use the prefilter path for vector metadata-filtered auto searches.
 
 ## Temporal (`enable_temporal=True`)
 

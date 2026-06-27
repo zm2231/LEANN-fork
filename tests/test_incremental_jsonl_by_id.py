@@ -196,7 +196,7 @@ def test_ivf_remove_add_failure_restores_original_state(monkeypatch, tmp_path):
         bm25.close()
 
 
-def test_flat_incremental_by_id_uses_cache_and_updates_exact_vectors(monkeypatch, tmp_path):
+def test_flat_incremental_by_id_uses_cache_and_updates_exact_vectors(monkeypatch, tmp_path, capsys):
     import leann.embedding_compute as embedding_compute
     import leann_backend_flat
     from leann.api import LeannSearcher
@@ -264,9 +264,33 @@ def test_flat_incremental_by_id_uses_cache_and_updates_exact_vectors(monkeypatch
 
     asyncio.run(cli.build_jsonl_index(cli_args))
     assert calls == [["alpha text", "beta text"]]
+    first_output = capsys.readouterr().out
+    assert "JSONL incremental state drift detected" not in first_output
+
+    index_dir = cli.indexes_dir / "tools"
+    meta_path = index_dir / "documents.leann.meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["total_passages"] == 2
+    assert meta["total_documents"] == 2
 
     asyncio.run(cli.build_jsonl_index(parser.parse_args(build_args)))
     assert calls == [["alpha text", "beta text"]]
+    second_output = capsys.readouterr().out
+    assert "Index up to date." in second_output
+    assert "JSONL incremental state drift detected" not in second_output
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["total_passages"] = None
+    meta["total_documents"] = None
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    asyncio.run(cli.build_jsonl_index(parser.parse_args(build_args)))
+    assert calls == [["alpha text", "beta text"]]
+    legacy_repair_output = capsys.readouterr().out
+    assert "Index up to date." in legacy_repair_output
+    assert "JSONL incremental state drift detected" not in legacy_repair_output
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["total_passages"] == 2
+    assert meta["total_documents"] == 2
 
     write_rows(
         [
@@ -277,7 +301,6 @@ def test_flat_incremental_by_id_uses_cache_and_updates_exact_vectors(monkeypatch
     asyncio.run(cli.build_jsonl_index(parser.parse_args(build_args)))
     assert calls == [["alpha text", "beta text"], ["beta changed"]]
 
-    index_dir = cli.indexes_dir / "tools"
     index_path = index_dir / "documents.leann"
     _, index_file, id_map_file, _ = leann_backend_flat.flat_backend._index_files(index_path)
     flat_vectors, _ = leann_backend_flat.flat_backend._load_vectors(index_file)

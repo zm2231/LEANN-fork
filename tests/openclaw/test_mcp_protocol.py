@@ -33,14 +33,16 @@ def test_tools_list():
 
 
 def test_tools_list_search_schema():
-    """leann_search tool must declare index_name and query as required params."""
+    """leann_search tool must declare a query and one index target."""
     req = {"jsonrpc": "2.0", "id": 3, "method": "tools/list", "params": {}}
     resp = handle_request(req)
     search_tool = next(t for t in resp["result"]["tools"] if t["name"] == "leann_search")
     schema = search_tool["inputSchema"]
     assert "index_name" in schema["properties"]
     assert "query" in schema["properties"]
-    assert "index_name" in schema["required"]
+    assert schema["required"] == ["query"]
+    assert {"required": ["index_name"]} in schema["anyOf"]
+    assert {"required": ["index_path"]} in schema["anyOf"]
     assert "query" in schema["required"]
     assert "metadata_filters" in schema["properties"]
     for prop in (
@@ -50,6 +52,7 @@ def test_tools_list_search_schema():
         "explain_filters",
         "diversify_by",
         "max_per_group",
+        "context_window",
     ):
         assert prop in schema["properties"]
         assert prop not in schema["required"]
@@ -61,10 +64,25 @@ def test_tools_list_multi_search_schema():
     resp = handle_request(req)
     tool = next(t for t in resp["result"]["tools"] if t["name"] == "leann_multi_search")
     schema = tool["inputSchema"]
-    assert "index_name" in schema["required"]
-    assert "query" in schema["required"]
+    assert schema["required"] == ["query"]
+    assert {"required": ["index_name"]} in schema["anyOf"]
+    assert {"required": ["index_path"]} in schema["anyOf"]
     for prop in ("extra_queries", "search_mode", "vector_weight", "metadata_filters", "fetch"):
         assert prop in schema["properties"]
+
+
+def test_tools_list_facets_schema_accepts_array_or_string_fields():
+    """leann_facets fields schema must match the handler's array and comma-string support."""
+    req = {"jsonrpc": "2.0", "id": 32, "method": "tools/list", "params": {}}
+    resp = handle_request(req)
+    tool = next(t for t in resp["result"]["tools"] if t["name"] == "leann_facets")
+    schema = tool["inputSchema"]
+    assert {"required": ["index_name"]} in schema["anyOf"]
+    assert {"required": ["index_path"]} in schema["anyOf"]
+    assert schema["properties"]["fields"]["anyOf"] == [
+        {"type": "array", "items": {"type": "string"}},
+        {"type": "string"},
+    ]
 
 
 def test_search_missing_params():
@@ -117,14 +135,30 @@ def test_jsonrpc_envelope():
 
 
 def test_leann_search_uses_plural_metadata_filters(monkeypatch):
-    """MCP leann_search must pass the real CLI flag name."""
-    calls = []
+    """MCP leann_search must pass metadata filters to the Python API."""
+    calls = {}
 
-    def fake_run(cmd, **kwargs):
-        calls.append((cmd, kwargs))
-        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    class FakeSearcher:
+        def __init__(self, index_path, enable_warmup=True):
+            calls["index_path"] = index_path
+            calls["enable_warmup"] = enable_warmup
 
-    monkeypatch.setattr(mcp.subprocess, "run", fake_run)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            pass
+
+        def search(self, query, top_k=5, **kwargs):
+            calls["query"] = query
+            calls["top_k"] = top_k
+            calls["kwargs"] = kwargs
+            return []
+
+    import leann.api
+
+    monkeypatch.setattr(mcp, "_resolve_index_path", lambda name: "/tmp/index/documents.leann")
+    monkeypatch.setattr(leann.api, "LeannSearcher", FakeSearcher)
     req = {
         "jsonrpc": "2.0",
         "id": 6,
@@ -140,19 +174,36 @@ def test_leann_search_uses_plural_metadata_filters(monkeypatch):
     }
     resp = handle_request(req)
     assert resp["result"]["content"][0]["text"] == "[]"
-    cmd = calls[0][0]
-    assert any(part.startswith("--metadata-filters=") for part in cmd)
-    assert not any(part.startswith("--metadata-filter=") for part in cmd)
+    assert calls["index_path"] == "/tmp/index/documents.leann"
+    assert calls["enable_warmup"] is False
+    assert calls["query"] == "q"
+    assert calls["kwargs"]["metadata_filters"] == {"source_type": {"==": "slack"}}
 
 
 def test_leann_search_forwards_advanced_search_controls(monkeypatch):
-    calls = []
+    calls = {}
 
-    def fake_run(cmd, **kwargs):
-        calls.append((cmd, kwargs))
-        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+    class FakeSearcher:
+        def __init__(self, index_path, enable_warmup=True):
+            calls["index_path"] = index_path
+            calls["enable_warmup"] = enable_warmup
 
-    monkeypatch.setattr(mcp.subprocess, "run", fake_run)
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            pass
+
+        def search(self, query, top_k=5, **kwargs):
+            calls["query"] = query
+            calls["top_k"] = top_k
+            calls["kwargs"] = kwargs
+            return ([], {"filter_mode": "test"})
+
+    import leann.api
+
+    monkeypatch.setattr(mcp, "_resolve_index_path", lambda name: "/tmp/index/documents.leann")
+    monkeypatch.setattr(leann.api, "LeannSearcher", FakeSearcher)
     req = {
         "jsonrpc": "2.0",
         "id": 61,
@@ -172,14 +223,15 @@ def test_leann_search_forwards_advanced_search_controls(monkeypatch):
         },
     }
     resp = handle_request(req)
-    assert resp["result"]["content"][0]["text"] == "[]"
-    cmd = calls[0][0]
-    assert "--vector-weight=0.4" in cmd
-    assert "--prefilter=always" in cmd
-    assert "--prefilter-threshold=0.2" in cmd
-    assert "--explain-filters" in cmd
-    assert "--diversify-by=source" in cmd
-    assert "--max-per-group=3" in cmd
+    payload = json.loads(resp["result"]["content"][0]["text"])
+    assert payload["results"] == []
+    assert calls["index_path"] == "/tmp/index/documents.leann"
+    assert calls["kwargs"]["vector_weight"] == 0.4
+    assert calls["kwargs"]["prefilter"] == "always"
+    assert calls["kwargs"]["prefilter_threshold"] == 0.2
+    assert calls["kwargs"]["explain_filters"] is True
+    assert calls["kwargs"]["diversify_by"] == "source"
+    assert calls["kwargs"]["max_per_group"] == 3
 
 
 def test_search_sessions_uses_plural_metadata_filters(monkeypatch):

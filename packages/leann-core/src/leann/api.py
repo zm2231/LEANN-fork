@@ -877,6 +877,13 @@ class LeannBuilder:
             "dimensions": self.dimensions,
             "backend_kwargs": self.backend_kwargs,
             "embedding_mode": self.embedding_mode,
+            "total_passages": len(offset_map),
+            "total_documents": len(
+                {
+                    str(chunk.get("metadata", {}).get("source_document_id", chunk["id"]))
+                    for chunk in self.chunks
+                }
+            ),
             "passage_sources": [
                 {
                     "type": "jsonl",
@@ -1031,6 +1038,13 @@ class LeannBuilder:
             "dimensions": self.dimensions,
             "backend_kwargs": self.backend_kwargs,
             "embedding_mode": self.embedding_mode,
+            "total_passages": len(offset_map),
+            "total_documents": len(
+                {
+                    str(chunk.get("metadata", {}).get("source_document_id", chunk["id"]))
+                    for chunk in self.chunks
+                }
+            ),
             "passage_sources": [
                 {
                     "type": "jsonl",
@@ -1186,9 +1200,7 @@ class LeannBuilder:
         # Native remove-capable backends: optional delete before re-insert.
         if remove_passage_ids and backend_name in ("ivf", "flat"):
             native_index_backup = index_file.with_suffix(index_file.suffix + ".update.bak")
-            native_passages_backup = passages_file.with_suffix(
-                passages_file.suffix + ".update.bak"
-            )
+            native_passages_backup = passages_file.with_suffix(passages_file.suffix + ".update.bak")
             native_offset_backup = offset_file.with_suffix(offset_file.suffix + ".update.bak")
             native_meta_backup = meta_path.with_suffix(meta_path.suffix + ".update.bak")
             native_bm25_backup = (
@@ -1824,9 +1836,9 @@ class LeannSearcher:
                 - String: "contains", "starts_with", "ends_with"
                 Example: {"chapter": {"<=": 5}, "tags": {"in": ["fiction", "drama"]}}
             prefilter: Metadata filter routing mode. "auto" scores the filtered subset directly
-                when filter selectivity is below prefilter_threshold, avoiding sparse-filter
-                false zeros from ANN + post-filter. "always" forces this path; "never" preserves
-                ANN + post-filter behavior.
+                for flat indexes, or when filter selectivity is below prefilter_threshold for
+                ANN backends, avoiding sparse-filter false zeros from ANN + post-filter.
+                "always" forces this path; "never" preserves ANN + post-filter behavior.
             prefilter_threshold: Selectivity threshold for auto prefilter routing.
             explain_filters: When True, return (results, diagnostics) with metadata filter
                 selectivity and routing information. The default returns results directly.
@@ -2075,9 +2087,10 @@ class LeannSearcher:
                 filter_stats = self.passage_manager.filter_stats(metadata_filters)
                 selectivity = float(filter_stats["filter_selectivity"])
                 logger.info("  Metadata filter selectivity: %.4f", selectivity)
-                if prefilter == "always" or (
-                    prefilter == "auto" and selectivity < prefilter_threshold
-                ):
+                auto_prefilter = prefilter == "auto" and (
+                    self.backend_name == "flat" or selectivity < prefilter_threshold
+                )
+                if prefilter == "always" or auto_prefilter:
                     logger.info("  Using brute-force scored prefilter path")
                     filtered_matches = self.passage_manager.matching_filtered_subset(
                         metadata_filters

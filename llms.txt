@@ -11,18 +11,55 @@ mcp.server: leann_mcp
 mcp.protocol_version: 2024-11-05
 
 # Tools
-mcp.tools: leann_list, leann_search
+mcp.tools: leann_list, leann_inspect, leann_search, leann_multi_search, leann_facets
 
 mcp.tool.leann_list.description: List available LEANN indexes
 mcp.tool.leann_list.input: {}
 
-mcp.tool.leann_search.description: Semantic search across a named LEANN index
-mcp.tool.leann_search.input.index_name: string, required
+mcp.tool.leann_inspect.description: Resolve a LEANN index target and return redacted metadata
+mcp.tool.leann_inspect.input.index_name: string, optional; use index_name or index_path
+mcp.tool.leann_inspect.input.index_path: string, optional; explicit index prefix, metadata file, or directory
+
+mcp.tool.leann_search.description: Semantic, hybrid, or filtered search across a LEANN index
 mcp.tool.leann_search.input.query: string, required
+mcp.tool.leann_search.input.index_name: string, optional; use index_name or index_path
+mcp.tool.leann_search.input.index_path: string, optional; explicit index prefix, metadata file, or directory
 mcp.tool.leann_search.input.top_k: integer, optional, default=5, min=1, max=20
 mcp.tool.leann_search.input.complexity: integer, optional, default=32, min=16, max=128
+mcp.tool.leann_search.input.metadata_filters: object, optional
+mcp.tool.leann_search.input.vector_weight: number, optional, default=1.0, min=0.0, max=1.0
+mcp.tool.leann_search.input.prefilter: string, optional, default=auto, enum=auto|always|never
+mcp.tool.leann_search.input.prefilter_threshold: number, optional, default=0.05
+mcp.tool.leann_search.input.explain_filters: boolean, optional, default=false
+mcp.tool.leann_search.input.include_context: boolean, optional, default=false
+mcp.tool.leann_search.input.diversify_by: string, optional
+mcp.tool.leann_search.input.max_per_group: integer, optional, default=2
+mcp.tool.leann_search.input.context_window: integer, optional, default=0
+
+mcp.tool.leann_multi_search.description: Batched multi-query search with reciprocal-rank fusion
+mcp.tool.leann_multi_search.input.query: string, required
+mcp.tool.leann_multi_search.input.index_name: string, optional; use index_name or index_path
+mcp.tool.leann_multi_search.input.index_path: string, optional; explicit index prefix, metadata file, or directory
+mcp.tool.leann_multi_search.input.extra_queries: array[string], optional
+mcp.tool.leann_multi_search.input.search_mode: string, optional, default=prose, enum=prose|code|exact|filtered
+mcp.tool.leann_multi_search.input.fetch: integer, optional
+mcp.tool.leann_multi_search.input.limit: integer, optional
+mcp.tool.leann_multi_search.input.complexity: integer, optional, default=64
+mcp.tool.leann_multi_search.input.metadata_filters: object, optional
+mcp.tool.leann_multi_search.input.vector_weight: number, optional
+mcp.tool.leann_multi_search.input.prefilter: string, optional, default=auto, enum=auto|always|never
+mcp.tool.leann_multi_search.input.diversify_by: string, optional
+mcp.tool.leann_multi_search.input.max_per_group: integer, optional, default=2
+mcp.tool.leann_multi_search.input.context_window: integer, optional
+
+mcp.tool.leann_facets.description: Count metadata facet values for a LEANN index
+mcp.tool.leann_facets.input.index_name: string, optional; use index_name or index_path
+mcp.tool.leann_facets.input.index_path: string, optional; explicit index prefix, metadata file, or directory
+mcp.tool.leann_facets.input.fields: array[string] or comma-separated string, required
+mcp.tool.leann_facets.input.max_values_per_field: integer, optional, default=20
 
 # Notes
 note: Build indexes with `leann build <name> --docs <files...>` before searching.
-example.add: claude mcp add --scope user leann-server -- leann_mcp
+note: Prefer index_path when multiple projects may contain the same index name.
+example.add: claude mcp add --scope user leann-server -- leann_mcp --base-dir "$(pwd)"
 example.verify: claude mcp list | cat

@@ -1,6 +1,6 @@
-# 🔥 LEANN Claude Code Integration
+# LEANN MCP Integration
 
-Transform your development workflow with intelligent code assistance using LEANN's semantic search directly in Claude Code.
+Use LEANN semantic search from MCP clients such as Claude Code, OpenClaw, Codex, or MCporter.
 
 For agent-facing discovery details, see `llms.txt` in the repository root.
 
@@ -21,11 +21,12 @@ Add the LEANN MCP server to Claude Code. Choose the scope based on how widely yo
 
 ```bash
 # Global (recommended): available in all projects for your user
-claude mcp add --scope user leann-server -- leann_mcp
+claude mcp add --scope user leann-server -- leann_mcp --base-dir "$(pwd)"
 ```
 
 - `leann-server`: the display name of the MCP server in Claude Code (you can change it).
 - `leann_mcp`: the Python entry point installed with LEANN that starts the MCP server.
+- `--base-dir`: the project directory used for index-name resolution and structured listing.
 
 Verify it is registered globally:
 
@@ -35,17 +36,27 @@ claude mcp list | cat
 
 ## 🛠️ Available Tools
 
-Once connected, you'll have access to these powerful semantic search tools in Claude Code:
+Once connected, MCP clients can call these tools:
 
-- **`leann_list`** - List all available indexes across your projects
-- **`leann_search`** - Perform semantic searches across code and documents
+- **`leann_list`** - Return structured index records with `name`, `index_path`, project path, backend, embedding model, and passage count.
+- **`leann_inspect`** - Resolve an `index_name` or explicit `index_path` and return redacted index metadata.
+- **`leann_search`** - Search an index through the LEANN Python API. Pass `query` plus either `index_name` or `index_path`.
+- **`leann_multi_search`** - Run batched/paraphrased search and fuse results.
+- **`leann_facets`** - Return metadata value counts before filtered search.
+
+Prefer `index_path` when known, for example:
+
+```text
+/path/to/project/.leann/indexes/my-index
+/path/to/project/.leann/indexes/my-index/documents.leann
+```
 
 
 ## 🎯 Quick Start Example
 
 ```bash
 # Add locally if you did not add it globally (current folder only; default if --scope is omitted)
-claude mcp add leann-server -- leann_mcp
+claude mcp add leann-server -- leann_mcp --base-dir "$(pwd)"
 
 # Build an index for your project (change to your actual path)
 # See the advanced examples below for more ways to configure indexing
@@ -103,7 +114,7 @@ leann build docs-and-configs --docs $(git ls-files "*.md" "*.yml" "*.yaml" "*.js
 
 ## **Try this in Claude Code:**
 ```
-Help me understand this codebase. List available indexes and search for authentication patterns.
+List available LEANN indexes, inspect the relevant index path, and search for authentication patterns.
 ```
 
 <p align="center">
@@ -116,9 +127,9 @@ If you see a prompt asking whether to proceed with LEANN, you can now use it in 
 
 The integration consists of three key components working seamlessly together:
 
-- **`leann`** - Core CLI tool for indexing and searching (installed globally via `uv tool install`)
-- **`leann_mcp`** - MCP server that wraps `leann` commands for Claude Code integration
-- **Claude Code** - Calls `leann_mcp`, which executes `leann` commands and returns intelligent results
+- **`leann`** - Core CLI tool for indexing and command-line search.
+- **`leann_mcp`** - MCP server that uses the LEANN Python API directly for search, facets, and metadata inspection.
+- **MCP client** - Calls `leann_mcp` and receives structured JSON tool results.
 
 ## 📁 File Support
 

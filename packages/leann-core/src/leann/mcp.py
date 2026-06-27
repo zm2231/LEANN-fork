@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
 
 _base_dir: str | None = None
@@ -60,6 +61,14 @@ def _parse_json_object(value: Any, label: str) -> tuple[dict[str, Any] | None, s
         if isinstance(parsed, dict):
             return parsed, None
     return None, f"Error: {label} must be a JSON object"
+
+
+def _content_response(request: dict[str, Any], text: str) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": request.get("id"),
+        "result": {"content": [{"type": "text", "text": text}]},
+    }
 
 
 def _result_to_dict(result, *, query: str | None = None, rank: int | None = None) -> dict[str, Any]:
@@ -125,17 +134,335 @@ def _resolve_index_path(index_name: str) -> str:
     from .cli import LeannCLI
 
     cli = LeannCLI()
-    resolved = cli._resolve_index_path(index_name, non_interactive=True, purpose="search", quiet=True)
-    if not resolved:
+    matches = _find_mcp_index_matches(cli, index_name)
+    if not matches:
         raise ValueError(f"Index not found: {index_name}")
-    return resolved
+    if len(matches) > 1:
+        choices = [_index_path_from_match(match) for match in matches]
+        raise ValueError(
+            f"Index name is ambiguous: {index_name}. Use index_path. Matches: {choices}"
+        )
+    return _index_path_from_match(matches[0])
+
+
+def _find_mcp_index_matches(cli: Any, index_name: str) -> list[dict[str, Any]]:
+    if _base_dir:
+        return _find_project_index_matches(cli, Path.cwd(), index_name)
+    return cli._find_all_matching_indexes(index_name)
+
+
+def _find_project_index_matches(
+    cli: Any, project_path: Path, index_name: str
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    index_dir = project_path / ".leann" / "indexes" / index_name
+    if (index_dir / "documents.leann.meta.json").is_file():
+        matches.append(
+            {
+                "project_path": project_path,
+                "index_dir": index_dir,
+                "is_current": True,
+                "kind": "cli",
+            }
+        )
+
+    iter_app_meta_files = getattr(cli, "_iter_app_meta_files", lambda _project_path: [])
+    cli_indexes_dir = project_path / ".leann" / "indexes"
+    seen_app_meta: set[Path] = set()
+    for meta_file in iter_app_meta_files(project_path):
+        if cli_indexes_dir.exists() and cli_indexes_dir in meta_file.parents:
+            continue
+        if (
+            meta_file.name != f"{index_name}.leann.meta.json"
+            and meta_file.parent.name != index_name
+        ):
+            continue
+        if meta_file in seen_app_meta:
+            continue
+        seen_app_meta.add(meta_file)
+        matches.append(
+            {
+                "project_path": project_path,
+                "files_dir": meta_file.parent,
+                "meta_file": meta_file,
+                "is_current": True,
+                "kind": "app",
+                "display_name": meta_file.parent.name,
+                "file_base": meta_file.name.replace(".leann.meta.json", ""),
+            }
+        )
+
+    return matches
+
+
+def _index_path_from_match(match: dict[str, Any]) -> str:
+    if match.get("kind") == "cli" or "index_dir" in match:
+        return str(match["index_dir"] / "documents.leann")
+    meta_file = match.get("meta_file")
+    if meta_file is None:
+        raise ValueError(f"Unsupported index match shape: {match}")
+    return str(meta_file)[: -len(".meta.json")]
+
+
+def _record_name_from_match(match: dict[str, Any]) -> str:
+    if match.get("kind") == "cli" or "index_dir" in match:
+        return match["index_dir"].name
+    return match.get("file_base") or match.get("display_name") or match["meta_file"].stem
+
+
+def _normalize_index_path(index_path: str) -> str:
+    path = os.path.abspath(os.path.expanduser(index_path))
+    if os.path.isdir(path):
+        meta_files = [
+            name
+            for name in os.listdir(path)
+            if name.endswith(".meta.json") or name.endswith(".leann.meta.json")
+        ]
+        if len(meta_files) != 1:
+            raise ValueError(
+                f"index_path directory must contain exactly one metadata file: {index_path}"
+            )
+        meta_path = os.path.join(path, meta_files[0])
+        return meta_path[: -len(".meta.json")]
+    if path.endswith(".meta.json"):
+        if not os.path.isfile(path):
+            raise ValueError(f"index_path metadata file not found: {index_path}")
+        return path[: -len(".meta.json")]
+    if not os.path.isfile(f"{path}.meta.json"):
+        raise ValueError(f"index_path metadata file not found: {path}.meta.json")
+    return path
+
+
+def _resolve_index_target(args: dict[str, Any]) -> str:
+    if args.get("index_path") or args.get("indexPath"):
+        return _normalize_index_path(str(args.get("index_path") or args.get("indexPath")))
+    if args.get("index_name") or args.get("indexName"):
+        return _resolve_index_path(str(args.get("index_name") or args.get("indexName")))
+    raise ValueError("index_name or index_path is required")
+
+
+def _target_schema() -> dict[str, Any]:
+    return {"anyOf": [{"required": ["index_name"]}, {"required": ["index_path"]}]}
+
+
+def _search_options_from_args(
+    args: dict[str, Any],
+    *,
+    default_top_k: int,
+    default_complexity: int,
+) -> tuple[int, dict[str, Any], bool]:
+    top_k = int(args.get("top_k", args.get("topK", default_top_k)))
+    complexity = int(args.get("complexity", default_complexity))
+    explain_filters = bool(args.get("explain_filters", args.get("explainFilters", False)))
+
+    metadata_filters, err = _parse_json_object(
+        args.get("metadata_filters", args.get("metadataFilters")), "metadata_filters"
+    )
+    if err:
+        raise ValueError(err)
+
+    search_kwargs: dict[str, Any] = {
+        "complexity": complexity,
+        "metadata_filters": metadata_filters,
+        "prefilter": args.get("prefilter", "auto"),
+        "explain_filters": explain_filters,
+    }
+    for src, dest, cast in (
+        ("vector_weight", "vector_weight", float),
+        ("vectorWeight", "vector_weight", float),
+        ("prefilter_threshold", "prefilter_threshold", float),
+        ("prefilterThreshold", "prefilter_threshold", float),
+        ("diversify_by", "diversify_by", str),
+        ("diversifyBy", "diversify_by", str),
+        ("max_per_group", "max_per_group", int),
+        ("maxPerGroup", "max_per_group", int),
+        ("context_window", "context_window", int),
+        ("contextWindow", "context_window", int),
+    ):
+        if src in args:
+            search_kwargs[dest] = cast(args[src])
+
+    return top_k, search_kwargs, explain_filters
+
+
+def _direct_search(args: dict[str, Any]) -> dict[str, Any]:
+    from .api import LeannSearcher
+
+    if not args.get("query"):
+        raise ValueError("query is required")
+
+    top_k, search_kwargs, explain_filters = _search_options_from_args(
+        args,
+        default_top_k=5,
+        default_complexity=32,
+    )
+
+    with _mcp_cwd():
+        index_path = _resolve_index_target(args)
+    with _suppress_stdout_fd():
+        with LeannSearcher(index_path=index_path, enable_warmup=False) as searcher:
+            raw_result = searcher.search(str(args["query"]), top_k=top_k, **search_kwargs)
+
+    diagnostics = None
+    results = raw_result
+    if explain_filters:
+        results, diagnostics = raw_result
+
+    payload: dict[str, Any] = {
+        "index_name": args.get("index_name", args.get("indexName")),
+        "index_path": index_path,
+        "query": args["query"],
+        "top_k": top_k,
+        "results": [_result_to_dict(result) for result in results],
+    }
+    if diagnostics is not None:
+        payload["diagnostics"] = diagnostics
+    return payload
+
+
+def _inspect_index(args: dict[str, Any]) -> dict[str, Any]:
+    with _mcp_cwd():
+        index_path = _resolve_index_target(args)
+
+    meta_path = f"{index_path}.meta.json"
+    meta: dict[str, Any] = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = _redact_sensitive(json.load(fh))
+
+    return {
+        "index_name": args.get("index_name", args.get("indexName")),
+        "index_path": index_path,
+        "base_dir": _base_dir or os.getcwd(),
+        "metadata": meta,
+    }
+
+
+def _redact_sensitive(value: Any) -> Any:
+    sensitive_tokens = ("api_key", "apikey", "token", "secret", "password")
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, child in value.items():
+            if any(token in key.lower() for token in sensitive_tokens):
+                redacted[key] = "[redacted]"
+            else:
+                redacted[key] = _redact_sensitive(child)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_sensitive(item) for item in value]
+    return value
+
+
+def _index_record(
+    index_name: str, index_path: str, project_path: str | None = None
+) -> dict[str, Any]:
+    meta_path = f"{index_path}.meta.json"
+    meta: dict[str, Any] = {}
+    if os.path.isfile(meta_path):
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = _redact_sensitive(json.load(fh))
+    passages_path = f"{index_path}.passages.jsonl"
+    passage_count = None
+    if os.path.isfile(passages_path):
+        with open(passages_path, encoding="utf-8", errors="replace") as fh:
+            passage_count = sum(1 for _ in fh)
+    return {
+        "name": index_name,
+        "index_path": index_path,
+        "project_path": project_path,
+        "backend": meta.get("backend_name"),
+        "embedding_model": meta.get("embedding_model"),
+        "passage_count": passage_count,
+    }
+
+
+def _list_indexes(args: dict[str, Any]) -> dict[str, Any]:
+    from .cli import LeannCLI
+
+    records: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    with _mcp_cwd():
+        cli = LeannCLI()
+        iter_app_meta_files = getattr(cli, "_iter_app_meta_files", lambda _project_path: [])
+        current_path = os.getcwd()
+        project_paths = [Path.cwd()] if _base_dir else cli._registered_project_paths()
+        for project_path in project_paths:
+            if not project_path.exists():
+                continue
+            project_matches = []
+            indexes_dir = project_path / ".leann" / "indexes"
+            if indexes_dir.is_dir():
+                for index_dir in sorted(p for p in indexes_dir.iterdir() if p.is_dir()):
+                    index_path = str(index_dir / "documents.leann")
+                    if os.path.isfile(f"{index_path}.meta.json"):
+                        project_matches.append(
+                            {
+                                "kind": "cli",
+                                "project_path": project_path,
+                                "index_dir": index_dir,
+                            }
+                        )
+            for meta_file in iter_app_meta_files(project_path):
+                cli_indexes_dir = project_path / ".leann" / "indexes"
+                if cli_indexes_dir.exists() and cli_indexes_dir in meta_file.parents:
+                    continue
+                project_matches.append(
+                    {
+                        "kind": "app",
+                        "project_path": project_path,
+                        "meta_file": meta_file,
+                        "file_base": meta_file.name.replace(".leann.meta.json", ""),
+                    }
+                )
+
+            for match in project_matches:
+                index_path = _index_path_from_match(match)
+                if index_path in seen or not os.path.isfile(f"{index_path}.meta.json"):
+                    continue
+                seen.add(index_path)
+                records.append(
+                    _index_record(
+                        _record_name_from_match(match),
+                        index_path,
+                        project_path=str(project_path),
+                    )
+                )
+
+    records.sort(key=lambda r: (r["project_path"] != current_path, r["name"]))
+    return {"base_dir": _base_dir or current_path, "indexes": records}
+
+
+def _direct_facets(args: dict[str, Any]) -> dict[str, Any]:
+    from .api import LeannSearcher
+
+    fields = args.get("fields")
+    if isinstance(fields, str):
+        fields = [field.strip() for field in fields.split(",") if field.strip()]
+    if not isinstance(fields, list) or not fields:
+        raise ValueError("fields must be a non-empty list of metadata field names")
+
+    with _mcp_cwd():
+        index_path = _resolve_index_target(args)
+    with _suppress_stdout_fd():
+        with LeannSearcher(index_path=index_path, enable_warmup=False) as searcher:
+            facets = searcher.facets(
+                [str(field) for field in fields],
+                max_values_per_field=int(args.get("max_values_per_field", 20)),
+            )
+
+    return {
+        "index_name": args.get("index_name", args.get("indexName")),
+        "index_path": index_path,
+        "fields": [str(field) for field in fields],
+        "facets": facets,
+    }
 
 
 def _direct_multi_search(args: dict[str, Any]) -> dict[str, Any]:
     from .api import LeannSearcher
 
-    if not args.get("index_name") or not args.get("query"):
-        raise ValueError("index_name and query are required")
+    if not args.get("query"):
+        raise ValueError("query is required")
 
     query = str(args["query"])
     extra_queries = args.get("extra_queries") or args.get("extraQueries") or []
@@ -188,14 +515,15 @@ def _direct_multi_search(args: dict[str, Any]) -> dict[str, Any]:
             search_kwargs[dest] = cast(args[src])
 
     with _mcp_cwd():
-        index_path = _resolve_index_path(str(args["index_name"]))
+        index_path = _resolve_index_target(args)
     with _suppress_stdout_fd():
         with LeannSearcher(index_path=index_path, enable_warmup=False) as searcher:
             result_lists = searcher.multi_search(queries, top_k=fetch, **search_kwargs)
     plain_lists = [item[0] if isinstance(item, tuple) else item for item in result_lists]
     fused = _rrf_fuse(plain_lists, queries, limit=limit)
     return {
-        "index_name": args["index_name"],
+        "index_name": args.get("index_name", args.get("indexName")),
+        "index_path": index_path,
         "search_mode": search_mode,
         "queries": queries,
         "vector_weight": vector_weight,
@@ -235,22 +563,19 @@ def handle_request(request):
                 "tools": [
                     {
                         "name": "leann_search",
-                        "description": """🔍 Search code using natural language - like having a coding assistant who knows your entire codebase!
+                        "description": """Search a LEANN index using semantic, hybrid, or filtered retrieval.
 
-🎯 **Perfect for**:
-- "How does authentication work?" → finds auth-related code
-- "Error handling patterns" → locates try-catch blocks and error logic
-- "Database connection setup" → finds DB initialization code
-- "API endpoint definitions" → locates route handlers
-- "Configuration management" → finds config files and usage
-
-💡 **Pro tip**: Use this before making any changes to understand existing patterns and conventions.""",
+Use index_path for zero-ambiguity targeting when the physical index is known. Use leann_inspect first when an index name may resolve across multiple projects.""",
                         "inputSchema": {
                             "type": "object",
                             "properties": {
                                 "index_name": {
                                     "type": "string",
-                                    "description": "Name of the LEANN index to search. Use 'leann_list' first to see available indexes.",
+                                    "description": "Name of the LEANN index to search. Use leann_inspect to see the resolved physical path.",
+                                },
+                                "index_path": {
+                                    "type": "string",
+                                    "description": "Explicit physical index prefix or index directory. Use this for zero-ambiguity targeting, like GitNexus repo selection.",
                                 },
                                 "query": {
                                     "type": "string",
@@ -269,11 +594,6 @@ def handle_request(request):
                                     "minimum": 16,
                                     "maximum": 128,
                                     "description": "Search complexity level. Use 16-32 for fast searches (recommended), 64+ for higher precision when needed.",
-                                },
-                                "show_metadata": {
-                                    "type": "boolean",
-                                    "default": False,
-                                    "description": "Include file paths and metadata in search results. Useful for understanding which files contain the results.",
                                 },
                                 "metadata_filters": {
                                     "type": "object",
@@ -304,6 +624,11 @@ def handle_request(request):
                                     "default": False,
                                     "description": "Include metadata filter routing diagnostics in JSON output.",
                                 },
+                                "include_context": {
+                                    "type": "boolean",
+                                    "default": False,
+                                    "description": "Return MCP execution context including resolved index_path and query settings.",
+                                },
                                 "diversify_by": {
                                     "type": "string",
                                     "description": "Metadata field used to cap results per group.",
@@ -315,8 +640,16 @@ def handle_request(request):
                                     "default": 2,
                                     "description": "Maximum results per diversify_by group.",
                                 },
+                                "context_window": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 10,
+                                    "default": 0,
+                                    "description": "Number of adjacent sibling chunks to attach before and after each hit.",
+                                },
                             },
-                            "required": ["index_name", "query"],
+                            "required": ["query"],
+                            **_target_schema(),
                         },
                     },
                     {
@@ -334,6 +667,10 @@ metadata filters should get a larger candidate pool.""",
                                 "index_name": {
                                     "type": "string",
                                     "description": "Name of the LEANN index to search.",
+                                },
+                                "index_path": {
+                                    "type": "string",
+                                    "description": "Explicit physical index prefix or index directory. Use this to avoid cwd-dependent index resolution.",
                                 },
                                 "query": {
                                     "type": "string",
@@ -394,12 +731,64 @@ metadata filters should get a larger candidate pool.""",
                                     "maximum": 256,
                                 },
                             },
-                            "required": ["index_name", "query"],
+                            "required": ["query"],
+                            **_target_schema(),
+                        },
+                    },
+                    {
+                        "name": "leann_inspect",
+                        "description": "Resolve a LEANN index name and return the exact index path, MCP base directory, and stored metadata. Use this before debugging missing/ambiguous indexes.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "index_name": {
+                                    "type": "string",
+                                    "description": "Name of the LEANN index to resolve.",
+                                },
+                                "index_path": {
+                                    "type": "string",
+                                    "description": "Explicit physical index prefix or index directory to inspect.",
+                                },
+                            },
+                            **_target_schema(),
+                        },
+                    },
+                    {
+                        "name": "leann_facets",
+                        "description": "Return metadata facet counts for one or more fields on a LEANN index. Use this to discover valid filter values before metadata-filtered search.",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "index_name": {
+                                    "type": "string",
+                                    "description": "Name of the LEANN index to inspect.",
+                                },
+                                "index_path": {
+                                    "type": "string",
+                                    "description": "Explicit physical index prefix or index directory.",
+                                },
+                                "fields": {
+                                    "anyOf": [
+                                        {"type": "array", "items": {"type": "string"}},
+                                        {"type": "string"},
+                                    ],
+                                    "description": "Metadata fields to count, e.g. ['source_type', 'project_id']. A comma-separated string is also accepted.",
+                                },
+                                "max_values_per_field": {
+                                    "type": "integer",
+                                    "default": 20,
+                                    "minimum": 1,
+                                    "maximum": 500,
+                                    "description": "Maximum distinct values to return per field.",
+                                },
+                            },
+                            "required": ["fields"],
+                            **_target_schema(),
                         },
                     },
                     {
                         "name": "leann_list",
-                        "description": "📋 Show all your indexed codebases - your personal code library! Use this to see what's available for search.",
+                        "description": "List discoverable LEANN CLI-format and app-format indexes with structured names, physical index paths, project paths, backend metadata, and passage counts.",
                         "inputSchema": {"type": "object", "properties": {}},
                     },
                     {
@@ -519,63 +908,18 @@ Examples:
 
         try:
             if tool_name == "leann_search":
-                # Validate required parameters
-                if not args.get("index_name") or not args.get("query"):
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request.get("id"),
-                        "result": {
-                            "content": [
-                                {
-                                    "type": "text",
-                                    "text": "Error: Both index_name and query are required",
-                                }
-                            ]
-                        },
-                    }
-
-                cmd = [
-                    *_leann_cmd(),
-                    "search",
-                    args["index_name"],
-                    args["query"],
-                    f"--top-k={args.get('top_k', 5)}",
-                    f"--complexity={args.get('complexity', 32)}",
-                    "--non-interactive",
-                    "--json",
-                ]
-                if args.get("show_metadata", False):
-                    cmd.append("--show-metadata")
-                filters, err = _parse_json_object(args.get("metadata_filters"), "metadata_filters")
-                if err:
-                    return {
-                        "jsonrpc": "2.0",
-                        "id": request.get("id"),
-                        "result": {"content": [{"type": "text", "text": err}]},
-                    }
-                if filters:
-                    cmd.append(f"--metadata-filters={json.dumps(filters)}")
-                for src, flag, cast in (
-                    ("vector_weight", "--vector-weight", float),
-                    ("vectorWeight", "--vector-weight", float),
-                    ("prefilter", "--prefilter", str),
-                    ("prefilter_threshold", "--prefilter-threshold", float),
-                    ("prefilterThreshold", "--prefilter-threshold", float),
-                    ("diversify_by", "--diversify-by", str),
-                    ("diversifyBy", "--diversify-by", str),
-                    ("max_per_group", "--max-per-group", int),
-                    ("maxPerGroup", "--max-per-group", int),
-                ):
-                    if src in args:
-                        cmd.append(f"{flag}={cast(args[src])}")
-                if args.get("explain_filters", args.get("explainFilters", False)):
-                    cmd.append("--explain-filters")
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    cwd=_base_dir,
+                payload = _direct_search(args)
+                text = (
+                    json.dumps(payload, ensure_ascii=False, indent=2)
+                    if args.get("include_context", args.get("includeContext", False))
+                    or args.get("explain_filters", args.get("explainFilters", False))
+                    else json.dumps(payload["results"], ensure_ascii=False, indent=2)
                 )
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {"content": [{"type": "text", "text": text}]},
+                }
 
             elif tool_name == "leann_multi_search":
                 payload = _direct_multi_search(args)
@@ -592,13 +936,39 @@ Examples:
                     },
                 }
 
+            elif tool_name == "leann_inspect":
+                payload = _inspect_index(args)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(payload, ensure_ascii=False, indent=2),
+                            }
+                        ]
+                    },
+                }
+
+            elif tool_name == "leann_facets":
+                payload = _direct_facets(args)
+                return {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps(payload, ensure_ascii=False, indent=2),
+                            }
+                        ]
+                    },
+                }
+
             elif tool_name == "leann_list":
-                result = subprocess.run(
-                    [*_leann_cmd(), "list"],
-                    capture_output=True,
-                    text=True,
-                    cwd=_base_dir,
-                )
+                payload = _list_indexes(args)
+                return _content_response(request, json.dumps(payload, ensure_ascii=False, indent=2))
 
             elif tool_name == "get_session":
                 from pathlib import Path
@@ -744,9 +1114,7 @@ Examples:
                             preview = str(preview_src)
                         preview = " ".join(preview.split())[:200]
                         ev_id = ev.get("id") or payload.get("id") or payload.get("call_id") or ""
-                        rendered.append(
-                            f"[{line_no}] {role}/{kind} @{ts} id={ev_id} — {preview}"
-                        )
+                        rendered.append(f"[{line_no}] {role}/{kind} @{ts} id={ev_id} — {preview}")
                     body = "\n".join(rendered)
 
                 header = (
@@ -791,9 +1159,7 @@ Examples:
                 ]
                 if filters:
                     cmd.append(f"--metadata-filters={json.dumps(filters)}")
-                result = subprocess.run(
-                    cmd, capture_output=True, text=True, cwd=_base_dir
-                )
+                result = subprocess.run(cmd, capture_output=True, text=True, cwd=_base_dir)
 
             else:
                 return {
@@ -824,6 +1190,8 @@ Examples:
                 },
             }
 
+        except ValueError as e:
+            return _content_response(request, f"Error: {e}")
         except Exception as e:
             return {
                 "jsonrpc": "2.0",

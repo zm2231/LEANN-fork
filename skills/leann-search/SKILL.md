@@ -90,7 +90,7 @@ Generic `build --docs` indexes expose factual filesystem fields such as `top_fol
 
 ## Sparse Filters And Debugging
 
-Use `prefilter="auto"` by default. It brute-force scores tiny filtered subsets to avoid ANN false-zero results.
+Use `prefilter="auto"` by default. It brute-force scores vector metadata-filtered searches on flat indexes, and tiny filtered subsets on ANN backends, to avoid false-zero results.
 
 If a filtered query returns nothing:
 
@@ -106,7 +106,7 @@ print(diag)
 Interpretation:
 
 - `filter_matches == 0`: filter is wrong or the corpus lacks that field/value.
-- `filter_matches > 0` and `results_returned == 0`: use `prefilter="always"`.
+- `filter_matches > 0` and `results_returned == 0`: on ANN backends, use `prefilter="always"` or raise `prefilter_threshold`.
 - One source dominates: use `diversify_by="source_document_id", max_per_group=2`.
 - Hits lack context: use `context_window=1` or `expand_context()`.
 
@@ -162,11 +162,39 @@ Temporal parsing strips time tokens from the semantic query and overscans `top_k
 
 ## MCP Tools
 
-`leann_search` mirrors the production CLI retrieval flags:
+Use MCP as the first-class agent surface. Prefer explicit `index_path` when the
+physical index is known; it avoids cwd-dependent name resolution and behaves like
+GitNexus' explicit `repo` selector. `index_path` may be either the index directory
+(`.../.leann/indexes/name`) or the index prefix (`.../documents.leann`).
 
-- Required: `index_name`, `query`
-- Optional: `top_k`, `complexity`, `metadata_filters`, `vector_weight`, `prefilter`, `prefilter_threshold`, `explain_filters`, `diversify_by`, `max_per_group`
-- CamelCase aliases are accepted for agent callers, such as `vectorWeight`, `prefilterThreshold`, `diversifyBy`, `maxPerGroup`, and `explainFilters`
+Start with:
+
+```text
+leann_list()
+leann_inspect(index_name="docs")
+leann_inspect(index_path="/path/to/.leann/indexes/docs")
+```
+
+`leann_list` returns structured index records with `name`, `index_path`,
+`project_path`, backend, embedding model, and passage count. Use its `index_path`
+directly for follow-up calls.
+
+Then search with the resolved target:
+
+```text
+leann_search(
+  index_path="/path/to/.leann/indexes/docs",
+  query="account proposal",
+  top_k=5,
+  complexity=32,
+)
+```
+
+`leann_search` uses the Python API directly, not a shell subprocess:
+
+- Required: `query`, plus one of `index_name` or `index_path`
+- Optional: `top_k`, `complexity`, `metadata_filters`, `vector_weight`, `prefilter`, `prefilter_threshold`, `explain_filters`, `include_context`, `diversify_by`, `max_per_group`, `context_window`
+- CamelCase aliases are accepted for agent callers, such as `indexPath`, `metadataFilters`, `vectorWeight`, `prefilterThreshold`, `diversifyBy`, `maxPerGroup`, `contextWindow`, `includeContext`, and `explainFilters`
 
 `leann_multi_search` is for batched/paraphrased retrieval:
 
@@ -175,7 +203,21 @@ Temporal parsing strips time tokens from the semantic query and overscans `top_k
 - `search_mode="exact"` -> `vector_weight=0.0`
 - `search_mode="filtered"` -> larger filtered candidate pool
 
-It accepts `extra_queries`, `fetch`, `limit`, and `context_window`/`contextWindow`.
+Required: `query`, plus one of `index_name` or `index_path`.
+
+Optional: `extra_queries`, `search_mode`, `top_k`, `fetch`, `limit`,
+`complexity`, `metadata_filters`, `vector_weight`, `prefilter`,
+`diversify_by`, `max_per_group`, and `context_window`/`contextWindow`.
+
+`leann_facets` returns metadata value counts before filtered search:
+
+```text
+leann_facets(
+  index_path="/path/to/.leann/indexes/docs",
+  fields=["source_type", "project_id"],
+  max_values_per_field=20,
+)
+```
 
 ## Multi Search
 

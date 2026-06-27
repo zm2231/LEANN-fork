@@ -1,5 +1,4 @@
 import numpy as np
-
 from leann.api import LeannSearcher, SearchResult
 
 
@@ -157,6 +156,38 @@ def test_dense_auto_filter_falls_back_to_ann_path():
     )
 
     assert [result.id for result in results] == ["ann-0", "ann-1"]
+    assert searcher.passage_manager.prefilter_calls == 0
+    assert searcher.backend_impl.search_calls == 1
+
+
+def test_flat_auto_prefilter_scores_dense_filter_subset():
+    searcher = _searcher(selectivity=0.60)
+    searcher.backend_name = "flat"
+
+    results = searcher.search(
+        "query",
+        top_k=5,
+        metadata_filters={"channel": {"==": "rare"}},
+        prefilter="auto",
+    )
+
+    assert [result.id for result in results] == ["0", "1", "2"]
+    assert searcher.passage_manager.prefilter_calls == 1
+    assert searcher.backend_impl.search_calls == 0
+
+
+def test_flat_prefilter_never_preserves_ann_postfilter_behavior():
+    searcher = _searcher(selectivity=0.60)
+    searcher.backend_name = "flat"
+
+    results = searcher.search(
+        "query",
+        top_k=5,
+        metadata_filters={"channel": {"==": "rare"}},
+        prefilter="never",
+    )
+
+    assert results == []
     assert searcher.passage_manager.prefilter_calls == 0
     assert searcher.backend_impl.search_calls == 1
 

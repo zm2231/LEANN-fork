@@ -28,6 +28,8 @@
 
 ### Changed
 
+- Changed `LeannSearcher.search(prefilter="auto")` so flat backend vector searches score the metadata-filtered subset directly. ANN backends still use the `prefilter_threshold` cutoff, and `prefilter="never"` still preserves ANN-then-post-filter behavior for debugging or A/B comparisons.
+
 - Synced fork with upstream `yichuan-w/LEANN` main (12 commits), bringing in:
   - **BM25 FTS5 migration** (upstream #328, #332–335, #341): replaces the in-memory `BM25Scorer` (O(corpus) RAM, fit-on-first-search full scan) with `Fts5BM25Index`, a SQLite FTS5 virtual table built once at index-build time and queried memory-bounded via `bm25()`. Default BM25 backend is now `fts5`. Only affects hybrid/keyword search; the dense + metadata-prefilter product path is unchanged.
   - **MPS memory pathology fix** (upstream #340): drops `torch.mps.set_per_process_memory_fraction(0.9)`, guards `torch.compile(reduce-overhead)` to CUDA only, and calls `torch.mps.empty_cache()` per batch. Footprint on 32 GB Apple Silicon `sentence-transformers` builds drops ~22 GB → ~3 GB. Does not affect the MLX/iq HTTP embedding path.

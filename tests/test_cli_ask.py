@@ -44,6 +44,51 @@ def test_cli_ask_metadata_filters_default_is_none():
     assert args.metadata_filters is None
 
 
+def test_cli_resolve_index_path_accepts_explicit_prefix(tmp_path):
+    index_prefix = tmp_path / "documents.leann"
+    (tmp_path / "documents.leann.meta.json").write_text("{}", encoding="utf-8")
+
+    cli = LeannCLI()
+
+    assert cli._resolve_index_path(str(index_prefix), quiet=True) == str(index_prefix)
+
+
+def test_cli_resolve_index_path_accepts_explicit_meta_file(tmp_path):
+    meta_path = tmp_path / "documents.leann.meta.json"
+    meta_path.write_text("{}", encoding="utf-8")
+
+    cli = LeannCLI()
+
+    assert cli._resolve_index_path(str(meta_path), quiet=True) == str(tmp_path / "documents.leann")
+
+
+def test_cli_resolve_index_path_accepts_explicit_index_directory(tmp_path):
+    (tmp_path / "documents.leann.meta.json").write_text("{}", encoding="utf-8")
+
+    cli = LeannCLI()
+
+    assert cli._resolve_index_path(str(tmp_path), quiet=True) == str(tmp_path / "documents.leann")
+
+
+def test_cli_resolve_index_path_skips_incomplete_current_index(tmp_path, monkeypatch, capsys):
+    current = tmp_path / "current"
+    registered = tmp_path / "registered"
+    current_index = current / ".leann" / "indexes" / "sessions"
+    registered_index = registered / ".leann" / "indexes" / "sessions"
+    current_index.mkdir(parents=True)
+    registered_index.mkdir(parents=True)
+    (registered_index / "documents.leann.meta.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.chdir(current)
+    cli = LeannCLI()
+    monkeypatch.setattr(cli, "_registered_project_paths", lambda: [current, registered])
+
+    resolved = cli._resolve_index_path("sessions", quiet=True)
+
+    assert resolved == str(registered_index / "documents.leann")
+    assert "registered" in capsys.readouterr().err
+
+
 def test_cli_ask_rejects_invalid_metadata_filters_json(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
 

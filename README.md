@@ -1048,10 +1048,10 @@ LEANN features intelligent code chunking that preserves semantic boundaries (fun
 
 </details>
 
-**The future of code assistance is here.** Transform your development workflow with LEANN's native MCP integration for Claude Code. Index your entire codebase and get intelligent code assistance directly in your IDE.
+**The future of local retrieval assistance is here.** Transform your workflow with LEANN's native MCP integration. Index code, notes, sessions, or documents and search them directly from your agent.
 
 **Key features:**
-- 🔍 **Semantic code search** across your entire project, fully local index and lightweight
+- 🔍 **Semantic search** across your local indexes, fully local index and lightweight
 - 🧠 **AST-aware chunking** preserves code structure (functions, classes)
 - 📚 **Context-aware assistance** for debugging and development
 - 🚀 **Zero-config setup** with automatic language detection
@@ -1059,9 +1059,19 @@ LEANN features intelligent code chunking that preserves semantic boundaries (fun
 ```bash
 # Install LEANN globally for MCP integration
 uv tool install leann-core --with leann
-claude mcp add --scope user leann-server -- leann_mcp
+claude mcp add --scope user leann-server -- leann_mcp --base-dir "$(pwd)"
 # Setup is automatic - just start using Claude Code!
 ```
+
+The MCP server exposes first-class LEANN tools:
+
+- `leann_inspect`: resolve an `index_name` or explicit `index_path` to the physical index prefix and metadata.
+- `leann_search`: search through the Python API directly. Pass `query` plus either `index_name` or `index_path`.
+- `leann_multi_search`: batched/paraphrased search with reciprocal-rank fusion.
+- `leann_facets`: inspect metadata value counts before filtered search.
+
+Use `index_path` for zero-ambiguity targeting when the physical index is known, for example
+`/path/to/project/.leann/indexes/my-index` or `/path/to/project/.leann/indexes/my-index/documents.leann`.
 Try our fully agentic pipeline with auto query rewriting, semantic search planning, and more:
 
 ![LEANN MCP Integration](assets/mcp_leann.png)
@@ -1090,7 +1100,7 @@ uv tool install leann-core --with leann
 leann --help
 ```
 
-> **Note**: Global installation is required for Claude Code integration. The `leann_mcp` server depends on the globally available `leann` command.
+> **Note**: Global installation is recommended for Claude Code integration. `leann_mcp` uses the installed LEANN Python package directly for search; keep `leann-core` and local backend packages installed from the same checkout when using a fork.
 
 
 

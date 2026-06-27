@@ -59,7 +59,7 @@ Add to `~/.openclaw/openclaw.json`:
   "mcpServers": {
     "leann": {
       "command": "leann_mcp",
-      "args": [],
+      "args": ["--base-dir", "/path/to/project"],
       "env": {}
     }
   }
@@ -73,7 +73,16 @@ Ask your agent:
 - "What did we decide about the API design?"
 - "Find my notes on deployment"
 
-The agent will call `leann_search` via MCP and return structured results.
+The agent can call:
+
+- `leann_inspect` to resolve an `index_name` or explicit `index_path`.
+- `leann_search` with `query` plus either `index_name` or `index_path`.
+- `leann_multi_search` for paraphrased/batched retrieval.
+- `leann_facets` to discover metadata values before filtered search.
+
+Prefer `index_path` when you know the physical index directory, e.g.
+`/path/to/project/.leann/indexes/memories`. This avoids cwd-dependent index
+resolution and is the most reliable mode for long-lived MCP hosts.
 
 ### 5. Keep the index fresh
 

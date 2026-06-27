@@ -33,14 +33,14 @@ Final state: branch is **34 commits ahead of `origin/main`**, 99 combined narrow
 
 Before: `search("X", metadata_filters={"sai_gate": {"==": "rare_class"}})` could return 0 results even when the filter matched 217 passages in the corpus, because ANN top-k didn't land on any of those 217.
 
-Now: when filter selectivity is below `prefilter_threshold` (default 5%), LEANN brute-force scores the matching passages directly against the query embedding and returns the top-k ranked results from that subset.
+Now: for vector search on flat indexes, or when filter selectivity is below `prefilter_threshold` (default 5%) on ANN backends, LEANN brute-force scores the matching passages directly against the query embedding and returns the top-k ranked results from that subset.
 
 ```python
 results = s.search(
     "rare earth minerals",
     top_k=8,
     metadata_filters={"sai_gate": {"==": "review_gated_machine_transcript"}},
-    prefilter="auto",           # default; "always" forces it, "never" disables
+    prefilter="auto",           # default; flat always prefilters, ANN uses threshold
     prefilter_threshold=0.05,
 )
 ```
