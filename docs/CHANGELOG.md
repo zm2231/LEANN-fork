@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added a tracked local-install verifier that checks package versions, imported source hashes, and HNSW stored-vector scoring support across the uv tool and local venvs.
+
 - Added `leann build --top-folder-depth` for docs indexes whose useful category folders are nested below a wrapper directory. The default depth `1` preserves existing `top_folder` behavior; depth `2` maps paths like `Clients/BD/file.pdf` to `top_folder=BD` while preserving full `relative_path`, `folder_path`, and `source_root`.
 
 - Added `leann build-jsonl --incremental-by-id` for stable-ID JSONL corpora. The new mode stores row hashes, validates duplicate/conflicting IDs, re-embeds only new/changed rows where the backend supports it, falls back to full rebuilds for unsafe HNSW changes, and checks passage/vector/BM25 sidecar drift before trusting incremental state.
@@ -27,6 +29,8 @@
   - `scripts/build_context_layer_temporal.py` builds a context-layer temporal eval corpus and `scripts/eval_temporal.py --multi-axis` evaluates Wave 1 and Wave 1.5 gold sets together.
 
 ### Changed
+
+- Aligned `leann-backend-ivf` package metadata with the rest of the fork at `0.3.7` so local installs cannot silently carry stale `0.3.6` backend metadata.
 
 - Changed `LeannSearcher.search(prefilter="auto")` so flat backend vector searches score the metadata-filtered subset directly. ANN backends still use the `prefilter_threshold` cutoff, and `prefilter="never"` still preserves ANN-then-post-filter behavior for debugging or A/B comparisons.
 

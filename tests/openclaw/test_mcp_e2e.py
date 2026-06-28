@@ -56,7 +56,7 @@ def mcp_index(tmp_path_factory):
             "sentence-transformers",
         ]
     )
-    asyncio.get_event_loop().run_until_complete(cli.build_index(args))
+    asyncio.run(cli.build_index(args))
 
     index_dir = cli.indexes_dir / "openclaw-memory"
     assert (index_dir / "documents.leann.meta.json").exists(), "Index build failed"

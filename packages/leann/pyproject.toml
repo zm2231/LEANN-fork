@@ -29,7 +29,7 @@ dependencies = [
     "leann-core>=0.1.0",
     "leann-backend-hnsw>=0.1.0",
     "leann-backend-diskann>=0.1.0",
-    "leann-backend-ivf>=0.3.6",
+    "leann-backend-ivf>=0.3.7",
 ]
 
 [project.optional-dependencies]
