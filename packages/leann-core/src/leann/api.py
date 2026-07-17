@@ -1149,6 +1149,7 @@ class LeannBuilder:
         passages_file = index_dir / f"{index_name}.passages.jsonl"
         offset_file = index_dir / f"{index_name}.passages.idx"
         index_file = index_dir / f"{index_prefix}.index"
+        idmap_file = index_dir / f"{index_prefix}.ids.txt"
 
         if not meta_path.exists() or not passages_file.exists() or not offset_file.exists():
             raise FileNotFoundError("Index metadata or passage files are missing; cannot update.")
@@ -1173,6 +1174,16 @@ class LeannBuilder:
         native_offset_backup: Optional[Path] = None
         native_meta_backup: Optional[Path] = None
         native_bm25_backup: Optional[Path] = None
+        native_idmap_backup: Optional[Path] = None
+        native_idmap_existed = idmap_file.exists()
+
+        def write_native_idmap() -> None:
+            tmp_path = idmap_file.with_suffix(idmap_file.suffix + ".tmp")
+            tmp_path.write_text(
+                "".join(f"{passage_id}\n" for passage_id in offset_map),
+                encoding="utf-8",
+            )
+            tmp_path.replace(idmap_file)
 
         def restore_native_backups() -> None:
             if native_index_backup and native_index_backup.exists():
@@ -1185,6 +1196,10 @@ class LeannBuilder:
                 shutil.copy2(native_meta_backup, meta_path)
             if native_bm25_backup and native_bm25_backup.exists() and bm25_db_path:
                 shutil.copy2(native_bm25_backup, bm25_db_path)
+            if native_idmap_backup and native_idmap_backup.exists():
+                shutil.copy2(native_idmap_backup, idmap_file)
+            elif not native_idmap_existed and idmap_file.exists():
+                idmap_file.unlink()
 
         def cleanup_native_backups() -> None:
             for backup in (
@@ -1193,6 +1208,7 @@ class LeannBuilder:
                 native_offset_backup,
                 native_meta_backup,
                 native_bm25_backup,
+                native_idmap_backup,
             ):
                 if backup and backup.exists():
                     backup.unlink()
@@ -1203,6 +1219,7 @@ class LeannBuilder:
             native_passages_backup = passages_file.with_suffix(passages_file.suffix + ".update.bak")
             native_offset_backup = offset_file.with_suffix(offset_file.suffix + ".update.bak")
             native_meta_backup = meta_path.with_suffix(meta_path.suffix + ".update.bak")
+            native_idmap_backup = idmap_file.with_suffix(idmap_file.suffix + ".update.bak")
             native_bm25_backup = (
                 bm25_db_path.with_suffix(bm25_db_path.suffix + ".update.bak")
                 if bm25_db_path and bm25_db_path.exists()
@@ -1212,6 +1229,8 @@ class LeannBuilder:
             shutil.copy2(passages_file, native_passages_backup)
             shutil.copy2(offset_file, native_offset_backup)
             shutil.copy2(meta_path, native_meta_backup)
+            if native_idmap_existed:
+                shutil.copy2(idmap_file, native_idmap_backup)
             if native_bm25_backup and bm25_db_path:
                 shutil.copy2(bm25_db_path, native_bm25_backup)
             offset_map_backup = offset_map.copy()
@@ -1258,8 +1277,13 @@ class LeannBuilder:
                 meta["total_passages"] = len(offset_map)
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, indent=2)
+                if backend_name in ("ivf", "flat"):
+                    write_native_idmap()
                 self.chunks.clear()
                 return
+            except Exception:
+                restore_native_backups()
+                raise
             finally:
                 cleanup_native_backups()
 
@@ -1299,12 +1323,20 @@ class LeannBuilder:
             valid_chunks.append(chunk)
 
         if not valid_chunks:
-            # Remove-only or file emptied: we may have already removed ids, just update meta
-            meta["total_passages"] = len(offset_map)
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta, f, indent=2)
-            self.chunks.clear()
-            return
+            try:
+                # Remove-only or file emptied: update all compatibility sidecars too.
+                meta["total_passages"] = len(offset_map)
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, indent=2)
+                if backend_name in ("ivf", "flat"):
+                    write_native_idmap()
+                self.chunks.clear()
+                return
+            except Exception:
+                restore_native_backups()
+                raise
+            finally:
+                cleanup_native_backups()
 
         texts_to_embed = [chunk["text"] for chunk in valid_chunks]
         embedding_options = {
@@ -1350,6 +1382,7 @@ class LeannBuilder:
                 )
                 native_offset_backup = offset_file.with_suffix(offset_file.suffix + ".update.bak")
                 native_meta_backup = meta_path.with_suffix(meta_path.suffix + ".update.bak")
+                native_idmap_backup = idmap_file.with_suffix(idmap_file.suffix + ".update.bak")
                 native_bm25_backup = (
                     bm25_db_path.with_suffix(bm25_db_path.suffix + ".update.bak")
                     if bm25_db_path and bm25_db_path.exists()
@@ -1359,6 +1392,8 @@ class LeannBuilder:
                 shutil.copy2(passages_file, native_passages_backup)
                 shutil.copy2(offset_file, native_offset_backup)
                 shutil.copy2(meta_path, native_meta_backup)
+                if native_idmap_existed:
+                    shutil.copy2(idmap_file, native_idmap_backup)
                 if native_bm25_backup and bm25_db_path:
                     shutil.copy2(bm25_db_path, native_bm25_backup)
             rollback_passages_size = passages_file.stat().st_size if passages_file.exists() else 0
@@ -1399,6 +1434,7 @@ class LeannBuilder:
                 meta["total_passages"] = len(offset_map)
                 with open(meta_path, "w", encoding="utf-8") as f:
                     json.dump(meta, f, indent=2)
+                write_native_idmap()
                 logger.info(
                     "Appended %d passages to %s index '%s'. Total: %d",
                     len(valid_chunks),

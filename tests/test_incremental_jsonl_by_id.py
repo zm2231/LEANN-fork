@@ -306,6 +306,8 @@ def test_flat_incremental_by_id_uses_cache_and_updates_exact_vectors(monkeypatch
     flat_vectors, _ = leann_backend_flat.flat_backend._load_vectors(index_file)
     assert flat_vectors.shape == (2, 3)
     assert json.loads(id_map_file.read_text(encoding="utf-8"))["ids"] == ["tool-a", "tool-b"]
+    legacy_id_map = index_dir / "documents.ids.txt"
+    assert legacy_id_map.read_text(encoding="utf-8").splitlines() == ["tool-a", "tool-b"]
 
     searcher = LeannSearcher(str(index_path), recompute_embeddings=False, warmup=False)
     results = searcher.search(
@@ -314,3 +316,14 @@ def test_flat_incremental_by_id_uses_cache_and_updates_exact_vectors(monkeypatch
         query_embedding=np.asarray([[0.0, 1.0, 0.0]], dtype=np.float32),
     )
     assert [result.id for result in results] == ["tool-b"]
+
+    write_rows(
+        [
+            {"id": "tool-b", "text": "beta changed", "metadata": {"group": "core"}},
+            {"id": "tool-c", "text": "gamma text", "metadata": {"group": "new"}},
+        ]
+    )
+    asyncio.run(cli.build_jsonl_index(parser.parse_args(build_args)))
+    assert calls[-1] == ["gamma text"]
+    assert json.loads(id_map_file.read_text(encoding="utf-8"))["ids"] == ["tool-b", "tool-c"]
+    assert legacy_id_map.read_text(encoding="utf-8").splitlines() == ["tool-b", "tool-c"]
