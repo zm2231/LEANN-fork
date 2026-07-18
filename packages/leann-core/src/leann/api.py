@@ -40,6 +40,18 @@ from .temporal import parse_temporal_query
 
 logger = logging.getLogger(__name__)
 
+_CREDENTIAL_OPTION_KEYS = frozenset(
+    {"api_key", "embedding_api_key", "access_token", "auth_token", "password", "secret"}
+)
+
+
+def _persistable_embedding_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Return runtime embedding options with credential material removed."""
+
+    return {
+        key: value for key, value in options.items() if key.lower() not in _CREDENTIAL_OPTION_KEYS
+    }
+
 
 def get_registered_backends() -> list[str]:
     """Get list of registered backend names."""
@@ -897,8 +909,9 @@ class LeannBuilder:
             ],
         }
 
-        if self.embedding_options:
-            meta_data["embedding_options"] = self.embedding_options
+        persisted_embedding_options = _persistable_embedding_options(self.embedding_options)
+        if persisted_embedding_options:
+            meta_data["embedding_options"] = persisted_embedding_options
 
         # Add storage status flags for HNSW backend
         if self.backend_name == "hnsw":
@@ -1059,8 +1072,9 @@ class LeannBuilder:
             "built_from_precomputed_embeddings": True,
         }
 
-        if self.embedding_options:
-            meta_data["embedding_options"] = self.embedding_options
+        persisted_embedding_options = _persistable_embedding_options(self.embedding_options)
+        if persisted_embedding_options:
+            meta_data["embedding_options"] = persisted_embedding_options
 
         # Add storage status flags for HNSW backend
         if self.backend_name == "hnsw":

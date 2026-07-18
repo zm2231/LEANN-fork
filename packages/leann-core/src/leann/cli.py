@@ -2769,7 +2769,21 @@ Examples:
             config[key] = self._build_config_arg(args, key)
         return config
 
+    @staticmethod
+    def _jsonl_build_configs_compatible(stored: Any, current: dict[str, Any]) -> bool:
+        """Compare JSONL build semantics while allowing immutable input revisions."""
+
+        if not isinstance(stored, dict):
+            return False
+        stored_settings = {key: value for key, value in stored.items() if key != "input"}
+        current_settings = {key: value for key, value in current.items() if key != "input"}
+        return stored_settings == current_settings
+
     def _build_config_arg(self, args, key: str) -> Any:
+        # Credentials are runtime-only. Persisting or replaying them from index
+        # metadata leaves secrets at rest and exposes them in process argv.
+        if key == "embedding_api_key":
+            return None
         try:
             return getattr(args, key)
         except AttributeError:
@@ -3116,7 +3130,7 @@ Examples:
                 meta = json.load(f)
             stored_build_config = meta.get("build_config")
             current_build_config = self._make_jsonl_build_config(args)
-            if stored_build_config != current_build_config:
+            if not self._jsonl_build_configs_compatible(stored_build_config, current_build_config):
                 print("JSONL build settings changed; rebuilding index.")
                 return False
 
@@ -3329,7 +3343,6 @@ Examples:
             "embedding_mode",
             "embedding_host",
             "embedding_api_base",
-            "embedding_api_key",
             "embedding_prompt_template",
             "query_prompt_template",
             "graph_degree",

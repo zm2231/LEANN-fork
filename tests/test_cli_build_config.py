@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import pickle
+from argparse import Namespace
 from pathlib import Path
 
 
@@ -20,6 +21,50 @@ def _write_index_meta(cli, index_name: str, meta: dict) -> Path:
     index_dir.mkdir(parents=True)
     (index_dir / "documents.leann.meta.json").write_text(json.dumps(meta))
     return index_dir
+
+
+def test_build_config_never_persists_embedding_credentials(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    from leann.cli import BUILD_CONFIG_FIELDS, BUILD_DEFAULTS
+
+    values = {key: BUILD_DEFAULTS[key] for key in BUILD_CONFIG_FIELDS}
+    values.update(
+        {
+            "index_name": "secure-jsonl",
+            "input": str(tmp_path / "input.jsonl"),
+            "text_field": "text",
+            "metadata_field": "metadata",
+            "id_field": "id",
+            "incremental_by_id": True,
+            "build_preset": None,
+            "embedding_api_key": "must-not-persist",
+        }
+    )
+
+    config = cli._make_jsonl_build_config(Namespace(**values))
+
+    assert config["embedding_api_key"] is None
+    assert "must-not-persist" not in json.dumps(config)
+
+
+def test_incremental_jsonl_config_allows_a_new_release_input_path(monkeypatch, tmp_path):
+    cli = _make_cli(monkeypatch, tmp_path)
+    stored = {
+        "version": 1,
+        "source_kind": "jsonl",
+        "input": "/releases/release-one/leann-context.jsonl",
+        "embedding_model": "model-a",
+        "embedding_api_key": None,
+    }
+    current = {
+        **stored,
+        "input": "/releases/release-two/leann-context.jsonl",
+    }
+
+    assert cli._jsonl_build_configs_compatible(stored, current)
+    assert not cli._jsonl_build_configs_compatible(
+        stored, {**current, "embedding_model": "model-b"}
+    )
 
 
 def test_reconstruct_prefers_persisted_build_config(monkeypatch, tmp_path):
@@ -76,7 +121,7 @@ def test_reconstruct_prefers_persisted_build_config(monkeypatch, tmp_path):
     assert args[args.index("--embedding-model") + 1] == "BAAI/bge-m3"
     assert args[args.index("--embedding-mode") + 1] == "openai"
     assert args[args.index("--embedding-api-base") + 1] == "http://127.0.0.1:8100/v1"
-    assert args[args.index("--embedding-api-key") + 1] == "test-key"
+    assert "--embedding-api-key" not in args
     assert args[args.index("--graph-degree") + 1] == "48"
     assert args[args.index("--complexity") + 1] == "96"
     assert "--no-compact" in args
