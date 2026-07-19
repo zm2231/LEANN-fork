@@ -1163,6 +1163,35 @@ def compute_embeddings_openai(
         # Fallback when tqdm is not available
         batch_iterator = range(0, len(texts), max_batch_size)
 
+    def request_batch(batch_texts: list[str], offset: int) -> list[list[float]]:
+        """Embed one batch, bisecting only payloads rejected as too large."""
+        try:
+            response = client.embeddings.create(model=model_name, input=batch_texts)
+            return [embedding.embedding for embedding in response.data]
+        except Exception as error:
+            status_code = getattr(error, "status_code", None)
+            detail = str(error).lower()
+            payload_too_large = status_code == 413 or (
+                "413" in detail
+                and (
+                    "request body" in detail or "payload" in detail or "content too large" in detail
+                )
+            )
+            if not payload_too_large or len(batch_texts) <= 1:
+                raise
+            midpoint = len(batch_texts) // 2
+            logger.warning(
+                "OpenAI embedding payload rejected; bisecting offset=%d size=%d into %d+%d: %r",
+                offset,
+                len(batch_texts),
+                midpoint,
+                len(batch_texts) - midpoint,
+                error,
+            )
+            return request_batch(batch_texts[:midpoint], offset) + request_batch(
+                batch_texts[midpoint:], offset + midpoint
+            )
+
     for i in batch_iterator:
         batch_texts = texts[i : i + max_batch_size]
         batch_lengths = text_lengths[i : i + max_batch_size]
@@ -1170,8 +1199,7 @@ def compute_embeddings_openai(
         batch_started = time.time()
 
         try:
-            response = client.embeddings.create(model=model_name, input=batch_texts)
-            batch_embeddings = [embedding.embedding for embedding in response.data]
+            batch_embeddings = request_batch(batch_texts, i)
             elapsed = time.time() - batch_started
 
             # Verify we got the expected number of embeddings

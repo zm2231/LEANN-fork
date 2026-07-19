@@ -48,6 +48,35 @@ class TestPromptTemplatePrepending:
         with patch("openai.OpenAI", return_value=mock_openai_client) as mock_openai:
             yield mock_openai
 
+    def test_payload_limit_bisects_only_rejected_batches(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "fake-test-key-for-mocking")
+        monkeypatch.setenv("LEANN_EMBED_BATCH_SIZE", "8")
+        mock_client = MagicMock()
+
+        def embed(*, model, input):
+            del model
+            if len(input) > 2:
+                raise RuntimeError("Infinity embed HTTP 413: Maximum request body size exceeded")
+            response = Mock()
+            response.data = [Mock(embedding=[float(len(text)), 1.0]) for text in input]
+            return response
+
+        mock_client.embeddings.create.side_effect = embed
+        with patch("openai.OpenAI", return_value=mock_client):
+            result = compute_embeddings_openai(
+                texts=[f"document-{index}" for index in range(5)],
+                model_name="text-embedding-3-small",
+            )
+
+        assert result.shape == (5, 2)
+        assert [call.kwargs["input"] for call in mock_client.embeddings.create.call_args_list] == [
+            ["document-0", "document-1", "document-2", "document-3", "document-4"],
+            ["document-0", "document-1"],
+            ["document-2", "document-3", "document-4"],
+            ["document-2"],
+            ["document-3", "document-4"],
+        ]
+
     def test_prompt_template_prepended_to_all_texts(self, mock_openai_module, mock_openai_client):
         """Verify template is prepended to all input texts.
 
