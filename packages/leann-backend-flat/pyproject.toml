@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "leann-backend-flat"
-version = "0.3.8"
+version = "0.3.9"
 description = "Exact flat-vector backend for LEANN"
 requires-python = ">=3.10"
 dependencies = [
-    "leann-core==0.3.8",
+    "leann-core==0.3.9",
     "numpy>=1.20.0,<3",
 ]
 

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Fixed flat-only installs importing the optional HNSW backend during core API import. `leann-core` now imports HNSW pruning code only for a recomputing build, so `leann-core` plus `leann-backend-flat` is a valid standalone stored-vector installation.
+
 ### Added
 
 - Added a tracked local-install verifier that checks package versions, imported source hashes, and HNSW stored-vector scoring support across the uv tool and local venvs.
